@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solana Scalper Dashboard</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08090d;
+        --panel: #11151c;
+        --panel-2: #171c25;
+        --text: #e8edf2;
+        --muted: #8f9aaa;
+        --line: #29313d;
+        --green: #38d48b;
+        --red: #ff5f6d;
+        --amber: #f3c969;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 14px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 22px;
+        border-bottom: 1px solid var(--line);
+        background: #0c0f14;
+      }
+
+      .header-left,
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .header-left {
+        min-width: 0;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      main {
+        width: min(1180px, calc(100vw - 28px));
+        margin: 18px auto 32px;
+      }
+
+      .status {
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .bot-pill {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .bot-pill.running {
+        border-color: rgba(56, 212, 139, 0.45);
+        color: var(--green);
+      }
+
+      .bot-pill.paused {
+        border-color: rgba(243, 201, 105, 0.45);
+        color: var(--amber);
+      }
+
+      button {
+        min-width: 74px;
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--muted);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .start-button {
+        border-color: rgba(56, 212, 139, 0.55);
+      }
+
+      .stop-button {
+        border-color: rgba(255, 95, 109, 0.55);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .metric,
+      section {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 8px;
+      }
+
+      .metric {
+        padding: 14px;
+        min-height: 78px;
+      }
+
+      .label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 9px;
+      }
+
+      .value {
+        font-size: 18px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .value.precise {
+        font-size: 16px;
+        line-height: 1.35;
+      }
+
+      section {
+        margin-top: 14px;
+        overflow: hidden;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel-2);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: middle;
+        overflow-wrap: anywhere;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      .empty {
+        padding: 24px 14px;
+        color: var(--muted);
+      }
+
+      .positive {
+        color: var(--green);
+      }
+
+      .negative {
+        color: var(--red);
+      }
+
+      .warn {
+        color: var(--amber);
+      }
+
+      @media (max-width: 900px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .controls {
+          width: 100%;
+          flex-wrap: wrap;
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+
+        main {
+          width: calc(100vw - 18px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="header-left">
+        <h1>Solana Scalper</h1>
+        <span class="bot-pill paused" id="botState">CONNECTING</span>
+      </div>
+      <div class="controls">
+        <button class="start-button" id="startButton" type="button" title="Resume scans and buys">Start</button>
+        <button class="stop-button" id="stopButton" type="button" title="Pause new scans and buys">Stop</button>
+        <div class="status" id="status">connecting...</div>
+      </div>
+    </header>
+
+    <main>
+      <div class="metrics">
+        <div class="metric">
+          <div class="label">SOL Balance</div>
+          <div class="value" id="solBalance">0.000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total Trades</div>
+          <div class="value" id="totalTrades">0</div>
+        </div>
+        <div class="metric">
+          <div class="label">Win Rate</div>
+          <div class="value" id="winRate">0.00%</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total PnL SOL</div>
+          <div class="value precise" id="pnlSol">0.000000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total PnL USD</div>
+          <div class="value precise" id="pnlUsd">$0.000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Realized PnL SOL</div>
+          <div class="value precise" id="realizedPnlSol">0.000000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Unrealized PnL SOL</div>
+          <div class="value precise" id="unrealizedPnlSol">0.000000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Gemini Tokens Left</div>
+          <div class="value precise" id="geminiTokens">0 / 0</div>
+        </div>
+      </div>
+
+      <section>
+        <div class="section-head">
+          <h2>Open Positions</h2>
+          <span id="mode" class="warn">SIMULATION</span>
+        </div>
+        <div id="positions"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Scan Activity</h2>
+          <span>last 100 decisions</span>
+        </div>
+        <div id="scanActivity"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Open Positions Log</h2>
+          <span>last 100 ticks</span>
+        </div>
+        <div id="positionLog"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Closed Trades</h2>
+          <span>last 20</span>
+        </div>
+        <div id="closedTrades"></div>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        timer: null,
+        controlBusy: false
+      };
+
+      function number(value, digits = 2) {
+        try {
+          return Number(value || 0).toFixed(digits);
+        } catch (error) {
+          console.error('format number failed', error);
+          return '0.00';
+        }
+      }
+
+      function money(value) {
+        try {
+          return `$${Number(value || 0).toFixed(2)}`;
+        } catch (error) {
+          console.error('format money failed', error);
+          return '$0.00';
+        }
+      }
+
+      function preciseMoney(value, digits = 6) {
+        try {
+          return `$${Number(value || 0).toFixed(digits)}`;
+        } catch (error) {
+          console.error('format precise money failed', error);
+          return '$0.000000';
+        }
+      }
+
+      function duration(valueMs) {
+        try {
+          const ms = Number(valueMs || 0);
+          if (ms < 1000) return `${ms.toFixed(0)}ms`;
+          return `${(ms / 1000).toFixed(3)}s`;
+        } catch (error) {
+          console.error('format duration failed', error);
+          return '0ms';
+        }
+      }
+
+      function pnlClass(value) {
+        try {
+          const numeric = Number(value || 0);
+          if (numeric > 0) return 'positive';
+          if (numeric < 0) return 'negative';
+          return '';
+        } catch (error) {
+          console.error('pnl class failed', error);
+          return '';
+        }
+      }
+
+      function renderStatus(data) {
+        try {
+          document.getElementById('solBalance').textContent = `${number(data.solBalance, 6)} SOL`;
+          document.getElementById('totalTrades').textContent = String(data.totalTrades || 0);
+          document.getElementById('winRate').textContent = `${number(data.winRate, 2)}%`;
+          document.getElementById('pnlSol').textContent = `${number(data.totalPnlSol, 9)} SOL`;
+          document.getElementById('pnlUsd').textContent = preciseMoney(data.totalPnlUsd, 6);
+          document.getElementById('realizedPnlSol').textContent = `${number(data.realizedPnlSol, 9)} SOL`;
+          document.getElementById('unrealizedPnlSol').textContent = `${number(data.unrealizedPnlSol, 9)} SOL`;
+          renderGeminiBudget(data.geminiBudget || {});
+          document.getElementById('mode').textContent = data.simulationMode ? 'SIMULATION' : 'LIVE';
+          document.getElementById('mode').className = data.simulationMode ? 'warn' : 'positive';
+          document.getElementById('status').textContent = `updated ${new Date().toLocaleTimeString()} | SOL ${money(data.solPriceUsd)}`;
+          renderBotState(data.bot || {});
+          renderPositions(data.openPositions || []);
+          renderScanActivity(data.scanActivityLog || []);
+          renderPositionLog(data.openPositionLog || []);
+          renderClosedTrades(data.closedTrades || []);
+        } catch (error) {
+          console.error('render status failed', error);
+        }
+      }
+
+      function renderGeminiBudget(budget) {
+        try {
+          const remaining = Number(budget.tokensRemainingToday || 0);
+          const usable = Number(budget.usableTokens || 0);
+          const target = document.getElementById('geminiTokens');
+          target.textContent = `${remaining.toFixed(0)} / ${usable.toFixed(0)}`;
+          target.className = `value precise ${remaining <= 0 ? 'negative' : remaining < 250 ? 'warn' : ''}`;
+        } catch (error) {
+          console.error('render Gemini budget failed', error);
+        }
+      }
+
+      function renderBotState(bot) {
+        try {
+          const botState = document.getElementById('botState');
+          const startButton = document.getElementById('startButton');
+          const stopButton = document.getElementById('stopButton');
+          const running = Boolean(bot.running);
+          const scanning = Boolean(bot.isScanning);
+
+          botState.textContent = running ? (scanning ? 'SCANNING' : 'RUNNING') : 'PAUSED';
+          botState.className = `bot-pill ${running ? 'running' : 'paused'}`;
+          startButton.disabled = state.controlBusy || running;
+          stopButton.disabled = state.controlBusy || !running;
+        } catch (error) {
+          console.error('render bot state failed', error);
+        }
+      }
+
+      function renderPositions(positions) {
+        try {
+          const target = document.getElementById('positions');
+          if (!positions.length) {
+            target.innerHTML = '<div class="empty">No open positions</div>';
+            return;
+          }
+
+          target.innerHTML = `
+            <table>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Entry</th>
+                  <th>Current</th>
+                  <th>Delta USD</th>
+                  <th>PnL %</th>
+                  <th>PnL SOL</th>
+                  <th>PnL USD</th>
+                  <th>Held</th>
+                  <th>Last Tick</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${positions.map((position) => `
+                  <tr>
+                    <td>${escapeHtml(position.symbol || position.tokenAddress)}</td>
+                    <td>${number(position.entryPrice, 12)}</td>
+                    <td>${number(position.currentPrice, 12)}</td>
+                    <td class="${pnlClass(position.priceDeltaUsd)}">${number(position.priceDeltaUsd, 12)}</td>
+                    <td class="${pnlClass(position.pnlPercent)}">${number(position.pnlPercent, 6)}%</td>
+                    <td class="${pnlClass(position.pnlSol)}">${number(position.pnlSol, 9)}</td>
+                    <td class="${pnlClass(position.pnlUsd)}">${preciseMoney(position.pnlUsd, 6)}</td>
+                    <td>${duration(position.timeHeldMs)}</td>
+                    <td>${new Date(position.lastUpdate || Date.now()).toLocaleTimeString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        } catch (error) {
+          console.error('render positions failed', error);
+        }
+      }
+
+      function renderPositionLog(entries) {
+        try {
+          const target = document.getElementById('positionLog');
+          if (!entries.length) {
+            target.innerHTML = '<div class="empty">No open position ticks yet</div>';
+            return;
+          }
+
+          target.innerHTML = `
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Token</th>
+                  <th>Entry</th>
+                  <th>Current</th>
+                  <th>Delta USD</th>
+                  <th>PnL %</th>
+                  <th>PnL SOL</th>
+                  <th>PnL USD</th>
+                  <th>Held</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${entries.map((entry) => `
+                  <tr>
+                    <td>${new Date(entry.timestamp).toLocaleTimeString()}</td>
+                    <td>${escapeHtml(entry.action || '')}</td>
+                    <td>${escapeHtml(entry.symbol || entry.tokenAddress)}</td>
+                    <td>${number(entry.entryPrice, 12)}</td>
+                    <td>${number(entry.currentPrice, 12)}</td>
+                    <td class="${pnlClass(entry.priceDeltaUsd)}">${number(entry.priceDeltaUsd, 12)}</td>
+                    <td class="${pnlClass(entry.pnlPercent)}">${number(entry.pnlPercent, 6)}%</td>
+                    <td class="${pnlClass(entry.pnlSol)}">${number(entry.pnlSol, 9)}</td>
+                    <td class="${pnlClass(entry.pnlUsd)}">${preciseMoney(entry.pnlUsd, 6)}</td>
+                    <td>${duration(entry.heldMs)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        } catch (error) {
+          console.error('render position log failed', error);
+        }
+      }
+
+      function renderScanActivity(entries) {
+        try {
+          const target = document.getElementById('scanActivity');
+          if (!entries.length) {
+            target.innerHTML = '<div class="empty">No scan decisions yet</div>';
+            return;
+          }
+
+          target.innerHTML = `
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Token</th>
+                  <th>Price</th>
+                  <th>Liq USD</th>
+                  <th>Vol H1</th>
+                  <th>5m %</th>
+                  <th>Score</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${entries.map((entry) => `
+                  <tr>
+                    <td>${new Date(entry.timestamp).toLocaleTimeString()}</td>
+                    <td>${escapeHtml(entry.action || '')}</td>
+                    <td>${escapeHtml(entry.symbol || entry.tokenAddress)}</td>
+                    <td>${number(entry.priceUsd, 12)}</td>
+                    <td>${number(entry.liquidityUsd, 2)}</td>
+                    <td>${number(entry.volumeH1, 2)}</td>
+                    <td class="${pnlClass(entry.priceChange5m)}">${number(entry.priceChange5m, 4)}%</td>
+                    <td>${entry.score === null || entry.score === undefined ? '-' : number(entry.score, 2)}</td>
+                    <td>${escapeHtml(entry.reason || '')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        } catch (error) {
+          console.error('render scan activity failed', error);
+        }
+      }
+
+      function renderClosedTrades(trades) {
+        try {
+          const target = document.getElementById('closedTrades');
+          if (!trades.length) {
+            target.innerHTML = '<div class="empty">No closed trades</div>';
+            return;
+          }
+
+          target.innerHTML = `
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Token</th>
+                  <th>Exit</th>
+                  <th>Delta USD</th>
+                  <th>PnL %</th>
+                  <th>PnL SOL</th>
+                  <th>PnL USD</th>
+                  <th>Held</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${trades.map((trade) => `
+                  <tr>
+                    <td>${new Date(trade.exitTime).toLocaleTimeString()}</td>
+                    <td>${escapeHtml(trade.symbol || trade.tokenAddress)}</td>
+                    <td>${number(trade.currentPrice, 12)}</td>
+                    <td class="${pnlClass(trade.priceDeltaUsd)}">${number(trade.priceDeltaUsd, 12)}</td>
+                    <td class="${pnlClass(trade.pnlPercent)}">${number(trade.pnlPercent, 6)}%</td>
+                    <td class="${pnlClass(trade.pnlSol)}">${number(trade.pnlSol, 9)}</td>
+                    <td class="${pnlClass(trade.pnlUsd)}">${preciseMoney(trade.pnlUsd, 6)}</td>
+                    <td>${duration(trade.heldMs)}</td>
+                    <td>${escapeHtml(trade.reason || '')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `;
+        } catch (error) {
+          console.error('render closed trades failed', error);
+        }
+      }
+
+      function escapeHtml(value) {
+        try {
+          return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        } catch (error) {
+          console.error('escape html failed', error);
+          return '';
+        }
+      }
+
+      async function refresh() {
+        try {
+          const response = await fetch('/api/status');
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const data = await response.json();
+          renderStatus(data);
+        } catch (error) {
+          console.error('dashboard refresh failed', error);
+          document.getElementById('status').textContent = `offline ${new Date().toLocaleTimeString()}`;
+        }
+      }
+
+      async function controlBot(action) {
+        try {
+          state.controlBusy = true;
+          renderBotState({
+            running: action === 'start',
+            isScanning: false
+          });
+
+          const response = await fetch(`/api/control/${action}`, {
+            method: 'POST'
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          await response.json();
+          await refresh();
+        } catch (error) {
+          console.error(`dashboard ${action} failed`, error);
+          document.getElementById('status').textContent = `${action} failed ${new Date().toLocaleTimeString()}`;
+        } finally {
+          try {
+            state.controlBusy = false;
+            refresh().catch((error) => console.error('post-control refresh failed', error));
+          } catch (error) {
+            console.error('control cleanup failed', error);
+          }
+        }
+      }
+
+      function start() {
+        try {
+          document.getElementById('startButton').addEventListener('click', () => {
+            try {
+              controlBot('start').catch((error) => console.error('start button failed', error));
+            } catch (error) {
+              console.error('start click handler failed', error);
+            }
+          });
+          document.getElementById('stopButton').addEventListener('click', () => {
+            try {
+              controlBot('stop').catch((error) => console.error('stop button failed', error));
+            } catch (error) {
+              console.error('stop click handler failed', error);
+            }
+          });
+          refresh().catch((error) => console.error('initial refresh failed', error));
+          state.timer = setInterval(() => {
+            try {
+              refresh().catch((error) => console.error('scheduled refresh failed', error));
+            } catch (error) {
+              console.error('scheduled refresh handler failed', error);
+            }
+          }, 3000);
+        } catch (error) {
+          console.error('dashboard start failed', error);
+        }
+      }
+
+      start();
+    </script>
+  </body>
+</html>
