@@ -1,7 +1,15 @@
-import fetch from 'node-fetch';
-import { PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import * as splToken from '@solana/spl-token';
 import CONFIG from '../config.js';
+import logger from './logger.js';
+import { callRpc } from './rpcClient.js';
+import {
+  buildSwapTransaction,
+  getComputeUnitPrice,
+  getQuote,
+  signSendAndConfirmSwap
+} from './swap.js';
+import { retryWithBackoff } from './utils/retry.js';
 
 export default class Executor {
   constructor(connection, wallet) {
@@ -9,7 +17,7 @@ export default class Executor {
       this.connection = connection;
       this.wallet = wallet;
     } catch (error) {
-      console.error('[executor] Failed to initialize executor:', error.message);
+      logger.error('[executor] Failed to initialize executor:', error.message);
     }
   }
 
@@ -27,21 +35,17 @@ export default class Executor {
         };
       }
 
-      const quoteResponse = await this.getQuote(CONFIG.SOL_MINT, candidate.tokenAddress, amountLamports);
-      if (!quoteResponse) {
-        return { success: false, txSignature: '', entryPrice: 0, amountOut: '0' };
-      }
-
-      const swapResponse = await this.getSwapTransaction(quoteResponse);
-      if (!swapResponse?.swapTransaction) {
-        console.error(`[executor] Swap transaction missing for buy ${candidate.symbol}`);
-        return { success: false, txSignature: '', entryPrice: 0, amountOut: '0' };
-      }
-
-      const txSignature = await this.signSendAndConfirm(swapResponse);
-      if (!txSignature) {
-        return { success: false, txSignature: '', entryPrice: 0, amountOut: '0' };
-      }
+      const quoteResponse = await getQuote(CONFIG.SOL_MINT, candidate.tokenAddress, amountLamports);
+      const computeUnitPrice = await getComputeUnitPrice();
+      const swapResponse = await buildSwapTransaction(
+        quoteResponse,
+        this.wallet.publicKey.toBase58(),
+        computeUnitPrice
+      );
+      const txSignature = await signSendAndConfirmSwap({
+        wallet: this.wallet,
+        swapResponse
+      });
 
       this.logTradeAction('BUY', candidate.symbol, candidate.priceUsd, '0.00%');
       return {
@@ -51,7 +55,7 @@ export default class Executor {
         amountOut: String(quoteResponse.outAmount || '0')
       };
     } catch (error) {
-      console.error(`[executor] Buy failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, error.message);
+      logger.error(`[executor] Buy failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, error.message);
       return { success: false, txSignature: '', entryPrice: 0, amountOut: '0' };
     }
   }
@@ -76,73 +80,27 @@ export default class Executor {
       }
 
       if (!amount || amount === '0') {
-        console.error(`[executor] Cannot sell ${token}; amountOut is missing.`);
+        logger.error(`[executor] Cannot sell ${token}; amountOut is missing.`);
         return { success: false, txSignature: '' };
       }
 
-      const quoteResponse = await this.getQuote(position.tokenAddress, CONFIG.SOL_MINT, amount);
-      if (!quoteResponse) {
-        return { success: false, txSignature: '' };
-      }
-
-      const swapResponse = await this.getSwapTransaction(quoteResponse);
-      if (!swapResponse?.swapTransaction) {
-        console.error(`[executor] Swap transaction missing for sell ${token}`);
-        return { success: false, txSignature: '' };
-      }
-
-      const txSignature = await this.signSendAndConfirm(swapResponse);
-      if (!txSignature) {
-        return { success: false, txSignature: '' };
-      }
+      const quoteResponse = await getQuote(position.tokenAddress, CONFIG.SOL_MINT, amount);
+      const computeUnitPrice = await getComputeUnitPrice();
+      const swapResponse = await buildSwapTransaction(
+        quoteResponse,
+        this.wallet.publicKey.toBase58(),
+        computeUnitPrice
+      );
+      const txSignature = await signSendAndConfirmSwap({
+        wallet: this.wallet,
+        swapResponse
+      });
 
       this.logTradeAction(`SELL_${reason}`, token, currentPrice, `${pnlPercent.toFixed(2)}%`);
       return { success: true, txSignature };
     } catch (error) {
-      console.error(`[executor] Sell failed for ${position?.symbol || position?.tokenAddress || 'unknown'}:`, error.message);
+      logger.error(`[executor] Sell failed for ${position?.symbol || position?.tokenAddress || 'unknown'}:`, error.message);
       return { success: false, txSignature: '' };
-    }
-  }
-
-  async getQuote(inputMint, outputMint, amount) {
-    try {
-      const url = new URL(CONFIG.JUPITER_QUOTE_URL);
-      url.searchParams.set('inputMint', inputMint);
-      url.searchParams.set('outputMint', outputMint);
-      url.searchParams.set('amount', String(amount));
-      url.searchParams.set('slippageBps', String(CONFIG.SLIPPAGE_BPS));
-      url.searchParams.set('onlyDirectRoutes', 'false');
-
-      const data = await this.fetchJson(url.toString());
-      if (!data?.outAmount) {
-        console.error(`[executor] Quote missing outAmount for ${inputMint} -> ${outputMint}`);
-        return null;
-      }
-      return data;
-    } catch (error) {
-      console.error('[executor] Quote request failed:', error.message);
-      return null;
-    }
-  }
-
-  async getSwapTransaction(quoteResponse) {
-    try {
-      const data = await this.fetchJson(CONFIG.JUPITER_SWAP_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          quoteResponse,
-          userPublicKey: this.wallet.publicKey.toBase58(),
-          prioritizationFeeLamports: CONFIG.PRIORITY_FEE_LAMPORTS,
-          dynamicComputeUnits: true
-        })
-      });
-      return data;
-    } catch (error) {
-      console.error('[executor] Swap transaction request failed:', error.message);
-      return null;
     }
   }
 
@@ -150,10 +108,17 @@ export default class Executor {
     try {
       const mint = new PublicKey(tokenMint);
       const tokenAccount = await this.getAssociatedTokenAddress(mint, this.wallet.publicKey);
-      const balance = await this.connection.getTokenAccountBalance(tokenAccount, 'confirmed');
+      const balance = await retryWithBackoff(
+        () => callRpc('getTokenAccountBalance', [
+          tokenAccount.toBase58(),
+          { commitment: 'confirmed' }
+        ]),
+        CONFIG.RPC_MAX_ATTEMPTS,
+        CONFIG.RPC_BASE_DELAY_MS
+      );
       return String(balance.value.amount || '0');
     } catch (error) {
-      console.error(`[executor] Failed to read token account balance for ${tokenMint}:`, error.message);
+      logger.error(`[executor] Failed to read token account balance for ${tokenMint}:`, error.message);
       return '0';
     }
   }
@@ -183,76 +148,8 @@ export default class Executor {
 
       throw new Error('No compatible associated token address helper found in @solana/spl-token.');
     } catch (error) {
-      console.error('[executor] Failed to derive associated token address:', error.message);
+      logger.error('[executor] Failed to derive associated token address:', error.message);
       throw error;
-    }
-  }
-
-  async signSendAndConfirm(swapResponse) {
-    try {
-      const swapTransactionBuffer = Buffer.from(swapResponse.swapTransaction, 'base64');
-      const transaction = VersionedTransaction.deserialize(swapTransactionBuffer);
-      transaction.sign([this.wallet]);
-
-      const txSignature = await this.connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: true,
-        maxRetries: 3
-      });
-
-      const lastValidBlockHeight = Number(swapResponse.lastValidBlockHeight || 0);
-      if (lastValidBlockHeight > 0) {
-        const confirmation = await this.connection.confirmTransaction(
-          {
-            signature: txSignature,
-            blockhash: transaction.message.recentBlockhash,
-            lastValidBlockHeight
-          },
-          'confirmed'
-        );
-
-        if (confirmation.value.err) {
-          console.error('[executor] Transaction confirmation error:', JSON.stringify(confirmation.value.err));
-          return '';
-        }
-      } else {
-        const confirmation = await this.connection.confirmTransaction(txSignature, 'confirmed');
-        if (confirmation.value.err) {
-          console.error('[executor] Transaction confirmation error:', JSON.stringify(confirmation.value.err));
-          return '';
-        }
-      }
-
-      return txSignature;
-    } catch (error) {
-      console.error('[executor] Failed to sign/send/confirm transaction:', error.message);
-      return '';
-    }
-  }
-
-  async fetchJson(url, options = {}) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        try {
-          controller.abort();
-        } catch (error) {
-          console.error('[executor] Failed to abort timed-out request:', error.message);
-        }
-      }, CONFIG.HTTP_TIMEOUT_MS);
-
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(`[executor] HTTP ${response.status} for ${url}: ${text.slice(0, 200)}`);
-        return null;
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error(`[executor] Failed to fetch JSON from ${url}:`, error.message);
-      return null;
     }
   }
 
@@ -263,7 +160,7 @@ export default class Executor {
       if (!entry) return 0;
       return ((current - entry) / entry) * 100;
     } catch (error) {
-      console.error('[executor] Failed to calculate PnL:', error.message);
+      logger.error('[executor] Failed to calculate PnL:', error.message);
       return 0;
     }
   }
@@ -276,9 +173,9 @@ export default class Executor {
         minute: '2-digit',
         second: '2-digit'
       });
-      console.log(`[${timestamp}] ${action} ${token} ${Number(price || 0).toFixed(10)} ${pnl}`);
+      logger.info(`[${timestamp}] ${action} ${token} ${Number(price || 0).toFixed(10)} ${pnl}`);
     } catch (error) {
-      console.error('[executor] Failed to log trade action:', error.message);
+      logger.error('[executor] Failed to log trade action:', error.message);
     }
   }
 }

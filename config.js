@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import logger from './src/logger.js';
 
 dotenv.config();
 
@@ -8,7 +9,7 @@ function envBoolean(name, defaultValue) {
     if (value === undefined) return defaultValue;
     return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
   } catch (error) {
-    console.error(`[config] Failed to read boolean env ${name}:`, error.message);
+    logger.error(`[config] Failed to read boolean env ${name}:`, error.message);
     return defaultValue;
   }
 }
@@ -19,7 +20,7 @@ function envNumber(name, defaultValue) {
     if (!Number.isFinite(value)) return defaultValue;
     return value;
   } catch (error) {
-    console.error(`[config] Failed to read number env ${name}:`, error.message);
+    logger.error(`[config] Failed to read number env ${name}:`, error.message);
     return defaultValue;
   }
 }
@@ -40,7 +41,8 @@ const CONFIG = {
   TRADED_TOKEN_COOLDOWN_MS: envNumber('TRADED_TOKEN_COOLDOWN_MS', 21600000),
   AI_MAX_NEW_DECISIONS_PER_SCAN: envNumber('AI_MAX_NEW_DECISIONS_PER_SCAN', 1),
   SLIPPAGE_BPS: 150,
-  PRIORITY_FEE_LAMPORTS: 100000,
+  PRIORITY_FEE: envNumber('PRIORITY_FEE', envNumber('PRIORITY_FEE_LAMPORTS', 100000)),
+  PRIORITY_FEE_LAMPORTS: envNumber('PRIORITY_FEE_LAMPORTS', envNumber('PRIORITY_FEE', 100000)),
   TRADE_SIZE_SOL: 0.05,
   TAKE_PROFIT_PERCENT: 5,
   STOP_LOSS_PERCENT: 3,
@@ -51,10 +53,21 @@ const CONFIG = {
   MOMENTUM_TAKE_PROFIT_PERCENT: 18,
   MOMENTUM_TRAILING_STOP_PERCENT: 4,
   MOMENTUM_MIN_PROFIT_FOR_TRAILING_PERCENT: 4,
-  MAX_CONCURRENT_POSITIONS: 2,
+  MAX_OPEN_POSITIONS: envNumber('MAX_OPEN_POSITIONS', 3),
+  MAX_CONCURRENT_POSITIONS: envNumber('MAX_CONCURRENT_POSITIONS', envNumber('MAX_OPEN_POSITIONS', 3)),
+  MAX_DAILY_LOSS_SOL: envNumber('MAX_DAILY_LOSS_SOL', 0.5),
   SCAN_INTERVAL_MS: 2000,
   SIMULATION_MODE: envBoolean('SIMULATION_MODE', true),
-  RPC_URL: process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
+  PRIMARY_RPC_URL: process.env.PRIMARY_RPC_URL || process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
+  FALLBACK_RPC_URL: process.env.FALLBACK_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  RPC_URL: process.env.RPC_URL || process.env.PRIMARY_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  HELIUS_API_KEY: process.env.HELIUS_API_KEY || '',
+  JITO_ENABLED: envBoolean('JITO_ENABLED', false),
+  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+  RPC_MAX_ATTEMPTS: envNumber('RPC_MAX_ATTEMPTS', 4),
+  RPC_BASE_DELAY_MS: envNumber('RPC_BASE_DELAY_MS', 300),
+  TRANSACTION_CONFIRM_TIMEOUT_MS: envNumber('TRANSACTION_CONFIRM_TIMEOUT_MS', 30000),
+  TRANSACTION_CONFIRM_POLL_MS: envNumber('TRANSACTION_CONFIRM_POLL_MS', 1000),
   DASHBOARD_PORT: 3001,
   HTTP_TIMEOUT_MS: 8000,
   DEXSCREENER_REQUEST_SPACING_MS: 350,

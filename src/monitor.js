@@ -1,5 +1,9 @@
 import fetch from 'node-fetch';
 import CONFIG from '../config.js';
+import { insertTrade } from './db.js';
+import logger from './logger.js';
+import { callRpc } from './rpcClient.js';
+import { closePosition as closeStatePosition, recordTrade } from './state.js';
 
 export default class Monitor {
   constructor(executor, connection) {
@@ -20,7 +24,7 @@ export default class Monitor {
       this.dexScreenerCooldownUntil = 0;
       this.lastRateLimitLogAt = 0;
     } catch (error) {
-      console.error('[monitor] Failed to initialize monitor:', error.message);
+      logger.error('[monitor] Failed to initialize monitor:', error.message);
     }
   }
 
@@ -33,22 +37,22 @@ export default class Monitor {
           this.isTicking = true;
           this.tick()
             .catch((error) => {
-              console.error('[monitor] Tick promise failed:', error.message);
+              logger.error('[monitor] Tick promise failed:', error.message);
             })
             .finally(() => {
               try {
                 this.isTicking = false;
               } catch (error) {
-                console.error('[monitor] Failed to clear tick guard:', error.message);
+                logger.error('[monitor] Failed to clear tick guard:', error.message);
               }
             });
         } catch (error) {
-          console.error('[monitor] Tick scheduling failed:', error.message);
+          logger.error('[monitor] Tick scheduling failed:', error.message);
           this.isTicking = false;
         }
       }, 1000);
     } catch (error) {
-      console.error('[monitor] Failed to start monitor:', error.message);
+      logger.error('[monitor] Failed to start monitor:', error.message);
     }
   }
 
@@ -59,7 +63,7 @@ export default class Monitor {
         this.interval = null;
       }
     } catch (error) {
-      console.error('[monitor] Failed to stop monitor:', error.message);
+      logger.error('[monitor] Failed to stop monitor:', error.message);
     }
   }
 
@@ -85,7 +89,7 @@ export default class Monitor {
       this.recordOpenPositionLog('OPEN', position, entryPrice);
       return position;
     } catch (error) {
-      console.error('[monitor] Failed to add position:', error.message);
+      logger.error('[monitor] Failed to add position:', error.message);
       return null;
     }
   }
@@ -97,12 +101,12 @@ export default class Monitor {
         try {
           await this.checkPosition(position);
         } catch (error) {
-          console.error(`[monitor] Position check failed for ${position.symbol}:`, error.message);
+          logger.error(`[monitor] Position check failed for ${position.symbol}:`, error.message);
         }
       });
       await Promise.all(checks);
     } catch (error) {
-      console.error('[monitor] Monitor tick failed:', error.message);
+      logger.error('[monitor] Monitor tick failed:', error.message);
     }
   }
 
@@ -138,7 +142,7 @@ export default class Monitor {
         await this.closePosition(position.tokenAddress, 'max_hold');
       }
     } catch (error) {
-      console.error(`[monitor] Failed to check position ${position?.symbol || 'unknown'}:`, error.message);
+      logger.error(`[monitor] Failed to check position ${position?.symbol || 'unknown'}:`, error.message);
     }
   }
 
@@ -154,6 +158,11 @@ export default class Monitor {
       const sellResult = await this.executor.sell(position, currentPrice, reason);
       const precision = this.buildPositionPrecision(position, currentPrice);
       const pnlSol = precision.pnlSol;
+
+      if (!sellResult.success) {
+        this.recordOpenPositionLog(`EXIT_FAILED_${reason}`, position, currentPrice);
+        return sellResult;
+      }
 
       const trade = {
         tokenAddress: position.tokenAddress,
@@ -175,6 +184,16 @@ export default class Monitor {
       };
 
       this.totalPnlSol += pnlSol;
+      insertTrade({
+        mint: position.tokenAddress,
+        side: 'sell',
+        amount_sol: Math.max(0, CONFIG.TRADE_SIZE_SOL + pnlSol),
+        price_usd: currentPrice,
+        tx_signature: sellResult.txSignature,
+        timestamp: trade.exitTime
+      });
+      recordTrade(pnlSol);
+      closeStatePosition(tokenAddress);
       this.closedTrades.unshift(trade);
       this.closedTrades = this.closedTrades.slice(0, 20);
       this.recordOpenPositionLog(`EXIT_${reason}`, position, currentPrice);
@@ -182,7 +201,7 @@ export default class Monitor {
       this.logTradeAction(`CLOSE_${reason}`, position.symbol, currentPrice, `${pnlPercent.toFixed(2)}%`);
       return sellResult;
     } catch (error) {
-      console.error(`[monitor] Failed to close position ${tokenAddress}:`, error.message);
+      logger.error(`[monitor] Failed to close position ${tokenAddress}:`, error.message);
       return { success: false, reason: error.message };
     }
   }
@@ -194,11 +213,11 @@ export default class Monitor {
         try {
           await this.closePosition(tokenAddress, reason);
         } catch (error) {
-          console.error(`[monitor] Failed to close ${tokenAddress} during ${reason}:`, error.message);
+          logger.error(`[monitor] Failed to close ${tokenAddress} during ${reason}:`, error.message);
         }
       }
     } catch (error) {
-      console.error('[monitor] Failed to close all positions:', error.message);
+      logger.error('[monitor] Failed to close all positions:', error.message);
     }
   }
 
@@ -228,7 +247,7 @@ export default class Monitor {
 
       return price;
     } catch (error) {
-      console.error(`[monitor] Failed to fetch current price for ${tokenAddress}:`, error.message);
+      logger.error(`[monitor] Failed to fetch current price for ${tokenAddress}:`, error.message);
       return 0;
     }
   }
@@ -245,7 +264,7 @@ export default class Monitor {
         this.solPriceUpdatedAt = Date.now();
       }
     } catch (error) {
-      console.error('[monitor] Failed to update SOL price:', error.message);
+      logger.error('[monitor] Failed to update SOL price:', error.message);
     }
   }
 
@@ -257,7 +276,7 @@ export default class Monitor {
         try {
           controller.abort();
         } catch (error) {
-          console.error('[monitor] Failed to abort timed-out request:', error.message);
+          logger.error('[monitor] Failed to abort timed-out request:', error.message);
         }
       }, CONFIG.HTTP_TIMEOUT_MS);
 
@@ -270,13 +289,13 @@ export default class Monitor {
       }
 
       if (!response.ok) {
-        console.error(`[monitor] HTTP ${response.status} for ${this.safeUrlForLog(url)}`);
+        logger.error(`[monitor] HTTP ${response.status} for ${this.safeUrlForLog(url)}`);
         return null;
       }
 
       return await response.json();
     } catch (error) {
-      console.error(`[monitor] Failed to fetch JSON from ${url}:`, error.message);
+      logger.error(`[monitor] Failed to fetch JSON from ${url}:`, error.message);
       return null;
     }
   }
@@ -295,7 +314,7 @@ export default class Monitor {
 
       this.nextDexScreenerRequestAt = Date.now() + CONFIG.DEXSCREENER_REQUEST_SPACING_MS;
     } catch (error) {
-      console.error('[monitor] Failed while waiting for DexScreener request slot:', error.message);
+      logger.error('[monitor] Failed while waiting for DexScreener request slot:', error.message);
     }
   }
 
@@ -306,11 +325,11 @@ export default class Monitor {
       this.dexScreenerCooldownUntil = Date.now() + cooldownMs;
 
       if (Date.now() - this.lastRateLimitLogAt > 5000) {
-        console.error(`[monitor] DexScreener rate limit hit; cooling down ${Math.ceil(cooldownMs / 1000)}s after ${this.safeUrlForLog(url)}`);
+        logger.error(`[monitor] DexScreener rate limit hit; cooling down ${Math.ceil(cooldownMs / 1000)}s after ${this.safeUrlForLog(url)}`);
         this.lastRateLimitLogAt = Date.now();
       }
     } catch (error) {
-      console.error('[monitor] Failed to handle DexScreener rate limit:', error.message);
+      logger.error('[monitor] Failed to handle DexScreener rate limit:', error.message);
     }
   }
 
@@ -318,7 +337,7 @@ export default class Monitor {
     try {
       return new Promise((resolve) => setTimeout(resolve, ms));
     } catch (error) {
-      console.error('[monitor] Failed to sleep:', error.message);
+      logger.error('[monitor] Failed to sleep:', error.message);
       return Promise.resolve();
     }
   }
@@ -328,7 +347,7 @@ export default class Monitor {
       const parsed = new URL(url);
       return `${parsed.origin}${parsed.pathname}`;
     } catch (error) {
-      console.error('[monitor] Failed to sanitize URL for log:', error.message);
+      logger.error('[monitor] Failed to sanitize URL for log:', error.message);
       return String(url);
     }
   }
@@ -340,7 +359,7 @@ export default class Monitor {
       if (!entry) return 0;
       return ((current - entry) / entry) * 100;
     } catch (error) {
-      console.error('[monitor] Failed to calculate PnL percent:', error.message);
+      logger.error('[monitor] Failed to calculate PnL percent:', error.message);
       return 0;
     }
   }
@@ -356,7 +375,7 @@ export default class Monitor {
         try {
           return total + Number(position.pnlSol || 0);
         } catch (error) {
-          console.error('[monitor] Failed while summing unrealized PnL:', error.message);
+          logger.error('[monitor] Failed while summing unrealized PnL:', error.message);
           return total;
         }
       }, 0);
@@ -379,7 +398,7 @@ export default class Monitor {
         closedTrades: this.closedTrades.slice(0, 20)
       };
     } catch (error) {
-      console.error('[monitor] Failed to build status payload:', error.message);
+      logger.error('[monitor] Failed to build status payload:', error.message);
       return {
         simulationMode: Boolean(CONFIG.SIMULATION_MODE),
         solBalance: 0,
@@ -402,9 +421,14 @@ export default class Monitor {
   async getSolBalanceLamports() {
     try {
       if (!this.executor?.wallet?.publicKey) return 0;
-      return await this.connection.getBalance(this.executor.wallet.publicKey, 'confirmed');
+      if (CONFIG.SIMULATION_MODE) return 0;
+      const balance = await callRpc('getBalance', [
+        this.executor.wallet.publicKey.toBase58(),
+        { commitment: 'confirmed' }
+      ]);
+      return Number(balance?.value || 0);
     } catch (error) {
-      console.error('[monitor] Failed to fetch SOL balance:', error.message);
+      logger.error('[monitor] Failed to fetch SOL balance:', error.message);
       return 0;
     }
   }
@@ -433,12 +457,12 @@ export default class Monitor {
             txSignature: position.txSignature
           };
         } catch (error) {
-          console.error('[monitor] Failed to snapshot position:', error.message);
+          logger.error('[monitor] Failed to snapshot position:', error.message);
           return null;
         }
       }).filter(Boolean);
     } catch (error) {
-      console.error('[monitor] Failed to snapshot open positions:', error.message);
+      logger.error('[monitor] Failed to snapshot open positions:', error.message);
       return [];
     }
   }
@@ -451,9 +475,9 @@ export default class Monitor {
         minute: '2-digit',
         second: '2-digit'
       });
-      console.log(`[${timestamp}] ${action} ${token} ${Number(price || 0).toFixed(10)} ${pnl}`);
+      logger.info(`[${timestamp}] ${action} ${token} ${Number(price || 0).toFixed(10)} ${pnl}`);
     } catch (error) {
-      console.error('[monitor] Failed to log trade action:', error.message);
+      logger.error('[monitor] Failed to log trade action:', error.message);
     }
   }
 
@@ -476,7 +500,7 @@ export default class Monitor {
         heldSeconds: Number(heldMs / 1000)
       };
     } catch (error) {
-      console.error('[monitor] Failed to build position precision data:', error.message);
+      logger.error('[monitor] Failed to build position precision data:', error.message);
       return {
         priceDeltaUsd: 0,
         pnlPercent: 0,
@@ -509,7 +533,7 @@ export default class Monitor {
       });
       this.openPositionLog = this.openPositionLog.slice(0, this.maxOpenPositionLogEntries);
     } catch (error) {
-      console.error('[monitor] Failed to record open position log:', error.message);
+      logger.error('[monitor] Failed to record open position log:', error.message);
     }
   }
 
@@ -518,7 +542,7 @@ export default class Monitor {
       return Number(candidate?.priceChange5m || 0) >= CONFIG.MOMENTUM_MIN_PRICE_CHANGE_5M
         && Number(candidate?.volumeSpike || 0) >= CONFIG.MOMENTUM_MIN_VOLUME_SPIKE;
     } catch (error) {
-      console.error('[monitor] Failed to classify momentum hold candidate:', error.message);
+      logger.error('[monitor] Failed to classify momentum hold candidate:', error.message);
       return false;
     }
   }
@@ -535,7 +559,7 @@ export default class Monitor {
 
       return CONFIG.MOMENTUM_EXTENDED_HOLD_SECONDS;
     } catch (error) {
-      console.error('[monitor] Failed to calculate max hold seconds:', error.message);
+      logger.error('[monitor] Failed to calculate max hold seconds:', error.message);
       return CONFIG.MAX_HOLD_SECONDS;
     }
   }
@@ -554,7 +578,7 @@ export default class Monitor {
 
       return highestPrice * (1 - CONFIG.MOMENTUM_TRAILING_STOP_PERCENT / 100);
     } catch (error) {
-      console.error('[monitor] Failed to calculate momentum trailing stop:', error.message);
+      logger.error('[monitor] Failed to calculate momentum trailing stop:', error.message);
       return 0;
     }
   }

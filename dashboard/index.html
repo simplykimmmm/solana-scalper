@@ -325,6 +325,15 @@
     </main>
 
     <script>
+      const logger = {
+        error: (...args) => {
+          window.__dashboardErrors = window.__dashboardErrors || [];
+          window.__dashboardErrors.push(args.map(String).join(' '));
+          window.__dashboardErrors = window.__dashboardErrors.slice(-50);
+        },
+        info: () => {}
+      };
+
       const state = {
         timer: null,
         controlBusy: false
@@ -334,7 +343,7 @@
         try {
           return Number(value || 0).toFixed(digits);
         } catch (error) {
-          console.error('format number failed', error);
+          logger.error('format number failed', error);
           return '0.00';
         }
       }
@@ -343,7 +352,7 @@
         try {
           return `$${Number(value || 0).toFixed(2)}`;
         } catch (error) {
-          console.error('format money failed', error);
+          logger.error('format money failed', error);
           return '$0.00';
         }
       }
@@ -352,7 +361,7 @@
         try {
           return `$${Number(value || 0).toFixed(digits)}`;
         } catch (error) {
-          console.error('format precise money failed', error);
+          logger.error('format precise money failed', error);
           return '$0.000000';
         }
       }
@@ -363,7 +372,7 @@
           if (ms < 1000) return `${ms.toFixed(0)}ms`;
           return `${(ms / 1000).toFixed(3)}s`;
         } catch (error) {
-          console.error('format duration failed', error);
+          logger.error('format duration failed', error);
           return '0ms';
         }
       }
@@ -375,7 +384,7 @@
           if (numeric < 0) return 'negative';
           return '';
         } catch (error) {
-          console.error('pnl class failed', error);
+          logger.error('pnl class failed', error);
           return '';
         }
       }
@@ -399,7 +408,7 @@
           renderPositionLog(data.openPositionLog || []);
           renderClosedTrades(data.closedTrades || []);
         } catch (error) {
-          console.error('render status failed', error);
+          logger.error('render status failed', error);
         }
       }
 
@@ -411,7 +420,7 @@
           target.textContent = `${remaining.toFixed(0)} / ${usable.toFixed(0)}`;
           target.className = `value precise ${remaining <= 0 ? 'negative' : remaining < 250 ? 'warn' : ''}`;
         } catch (error) {
-          console.error('render Gemini budget failed', error);
+          logger.error('render Gemini budget failed', error);
         }
       }
 
@@ -428,7 +437,7 @@
           startButton.disabled = state.controlBusy || running;
           stopButton.disabled = state.controlBusy || !running;
         } catch (error) {
-          console.error('render bot state failed', error);
+          logger.error('render bot state failed', error);
         }
       }
 
@@ -473,7 +482,7 @@
             </table>
           `;
         } catch (error) {
-          console.error('render positions failed', error);
+          logger.error('render positions failed', error);
         }
       }
 
@@ -520,7 +529,7 @@
             </table>
           `;
         } catch (error) {
-          console.error('render position log failed', error);
+          logger.error('render position log failed', error);
         }
       }
 
@@ -565,7 +574,7 @@
             </table>
           `;
         } catch (error) {
-          console.error('render scan activity failed', error);
+          logger.error('render scan activity failed', error);
         }
       }
 
@@ -610,7 +619,7 @@
             </table>
           `;
         } catch (error) {
-          console.error('render closed trades failed', error);
+          logger.error('render closed trades failed', error);
         }
       }
 
@@ -623,7 +632,7 @@
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
         } catch (error) {
-          console.error('escape html failed', error);
+          logger.error('escape html failed', error);
           return '';
         }
       }
@@ -637,7 +646,7 @@
           const data = await response.json();
           renderStatus(data);
         } catch (error) {
-          console.error('dashboard refresh failed', error);
+          logger.error('dashboard refresh failed', error);
           document.getElementById('status').textContent = `offline ${new Date().toLocaleTimeString()}`;
         }
       }
@@ -661,14 +670,14 @@
           await response.json();
           await refresh();
         } catch (error) {
-          console.error(`dashboard ${action} failed`, error);
+          logger.error(`dashboard ${action} failed`, error);
           document.getElementById('status').textContent = `${action} failed ${new Date().toLocaleTimeString()}`;
         } finally {
           try {
             state.controlBusy = false;
-            refresh().catch((error) => console.error('post-control refresh failed', error));
+            refresh().catch((error) => logger.error('post-control refresh failed', error));
           } catch (error) {
-            console.error('control cleanup failed', error);
+            logger.error('control cleanup failed', error);
           }
         }
       }
@@ -677,28 +686,28 @@
         try {
           document.getElementById('startButton').addEventListener('click', () => {
             try {
-              controlBot('start').catch((error) => console.error('start button failed', error));
+              controlBot('start').catch((error) => logger.error('start button failed', error));
             } catch (error) {
-              console.error('start click handler failed', error);
+              logger.error('start click handler failed', error);
             }
           });
           document.getElementById('stopButton').addEventListener('click', () => {
             try {
-              controlBot('stop').catch((error) => console.error('stop button failed', error));
+              controlBot('stop').catch((error) => logger.error('stop button failed', error));
             } catch (error) {
-              console.error('stop click handler failed', error);
+              logger.error('stop click handler failed', error);
             }
           });
-          refresh().catch((error) => console.error('initial refresh failed', error));
+          refresh().catch((error) => logger.error('initial refresh failed', error));
           state.timer = setInterval(() => {
             try {
-              refresh().catch((error) => console.error('scheduled refresh failed', error));
+              refresh().catch((error) => logger.error('scheduled refresh failed', error));
             } catch (error) {
-              console.error('scheduled refresh handler failed', error);
+              logger.error('scheduled refresh handler failed', error);
             }
           }, 3000);
         } catch (error) {
-          console.error('dashboard start failed', error);
+          logger.error('dashboard start failed', error);
         }
       }
 

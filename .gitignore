@@ -1,5 +1,7 @@
 .env
 data/
+logs/
+shutdown_state.json
 node_modules/
 npm-debug.log*
 .DS_Store

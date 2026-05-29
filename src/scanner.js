@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import CONFIG from '../config.js';
+import logger from './logger.js';
 
 export default class Scanner {
   constructor() {
@@ -14,23 +15,23 @@ export default class Scanner {
       this.dexScreenerCooldownUntil = 0;
       this.lastRateLimitLogAt = 0;
     } catch (error) {
-      console.error('[scanner] Failed to initialize scanner:', error.message);
+      logger.error('[scanner] Failed to initialize scanner:', error.message);
     }
   }
 
   startOptionalWebSocketFeed(url = process.env.DEXSCREENER_WS_URL) {
     try {
       if (!url) {
-        console.log('[scanner] No DexScreener WebSocket URL configured; using public polling only.');
+        logger.info('[scanner] No DexScreener WebSocket URL configured; using public polling only.');
         return;
       }
 
       this.feedSocket = new WebSocket(url);
       this.feedSocket.on('open', () => {
         try {
-          console.log('[scanner] DexScreener WebSocket feed connected.');
+          logger.info('[scanner] DexScreener WebSocket feed connected.');
         } catch (error) {
-          console.error('[scanner] WebSocket open handler failed:', error.message);
+          logger.error('[scanner] WebSocket open handler failed:', error.message);
         }
       });
       this.feedSocket.on('message', (message) => {
@@ -39,25 +40,25 @@ export default class Scanner {
           this.feedEvents.push(parsed);
           if (this.feedEvents.length > 100) this.feedEvents.shift();
         } catch (error) {
-          console.error('[scanner] Failed to parse WebSocket message:', error.message);
+          logger.error('[scanner] Failed to parse WebSocket message:', error.message);
         }
       });
       this.feedSocket.on('error', (error) => {
         try {
-          console.error('[scanner] DexScreener WebSocket error:', error.message);
+          logger.error('[scanner] DexScreener WebSocket error:', error.message);
         } catch (handlerError) {
-          console.error('[scanner] WebSocket error handler failed:', handlerError.message);
+          logger.error('[scanner] WebSocket error handler failed:', handlerError.message);
         }
       });
       this.feedSocket.on('close', () => {
         try {
-          console.log('[scanner] DexScreener WebSocket feed closed.');
+          logger.info('[scanner] DexScreener WebSocket feed closed.');
         } catch (error) {
-          console.error('[scanner] WebSocket close handler failed:', error.message);
+          logger.error('[scanner] WebSocket close handler failed:', error.message);
         }
       });
     } catch (error) {
-      console.error('[scanner] Failed to start optional WebSocket feed:', error.message);
+      logger.error('[scanner] Failed to start optional WebSocket feed:', error.message);
     }
   }
 
@@ -69,7 +70,7 @@ export default class Scanner {
       this.lastCandidates = candidates;
       return candidates;
     } catch (error) {
-      console.error('[scanner] Scan failed:', error.message);
+      logger.error('[scanner] Scan failed:', error.message);
       return [];
     }
   }
@@ -79,7 +80,7 @@ export default class Scanner {
       const data = await this.fetchJson(CONFIG.DEXSCREENER_TOKENS_URL);
       return Array.isArray(data?.pairs) ? data.pairs : [];
     } catch (error) {
-      console.error('[scanner] Failed to fetch latest DexScreener token pairs:', error.message);
+      logger.error('[scanner] Failed to fetch latest DexScreener token pairs:', error.message);
       return [];
     }
   }
@@ -106,7 +107,7 @@ export default class Scanner {
       this.boostPairsCacheExpiresAt = Date.now() + CONFIG.DEXSCREENER_BOOST_CACHE_MS;
       return pairs;
     } catch (error) {
-      console.error('[scanner] Failed to fetch boosted DexScreener tokens:', error.message);
+      logger.error('[scanner] Failed to fetch boosted DexScreener tokens:', error.message);
       return [];
     }
   }
@@ -130,13 +131,13 @@ export default class Scanner {
             allPairs.push(...data.pairs);
           }
         } catch (error) {
-          console.error('[scanner] Failed to fetch boosted token batch:', error.message);
+          logger.error('[scanner] Failed to fetch boosted token batch:', error.message);
         }
       }
 
       return allPairs;
     } catch (error) {
-      console.error('[scanner] Failed to fetch token pairs by addresses:', error.message);
+      logger.error('[scanner] Failed to fetch token pairs by addresses:', error.message);
       return [];
     }
   }
@@ -149,7 +150,7 @@ export default class Scanner {
         try {
           controller.abort();
         } catch (error) {
-          console.error('[scanner] Failed to abort timed-out request:', error.message);
+          logger.error('[scanner] Failed to abort timed-out request:', error.message);
         }
       }, CONFIG.HTTP_TIMEOUT_MS);
 
@@ -162,13 +163,13 @@ export default class Scanner {
       }
 
       if (!response.ok) {
-        console.error(`[scanner] HTTP ${response.status} for ${this.safeUrlForLog(url)}`);
+        logger.error(`[scanner] HTTP ${response.status} for ${this.safeUrlForLog(url)}`);
         return null;
       }
 
       return await response.json();
     } catch (error) {
-      console.error(`[scanner] Failed to fetch JSON from ${url}:`, error.message);
+      logger.error(`[scanner] Failed to fetch JSON from ${url}:`, error.message);
       return null;
     }
   }
@@ -187,7 +188,7 @@ export default class Scanner {
 
       this.nextDexScreenerRequestAt = Date.now() + CONFIG.DEXSCREENER_REQUEST_SPACING_MS;
     } catch (error) {
-      console.error('[scanner] Failed while waiting for DexScreener request slot:', error.message);
+      logger.error('[scanner] Failed while waiting for DexScreener request slot:', error.message);
     }
   }
 
@@ -198,11 +199,11 @@ export default class Scanner {
       this.dexScreenerCooldownUntil = Date.now() + cooldownMs;
 
       if (Date.now() - this.lastRateLimitLogAt > 5000) {
-        console.error(`[scanner] DexScreener rate limit hit; cooling down ${Math.ceil(cooldownMs / 1000)}s after ${this.safeUrlForLog(url)}`);
+        logger.error(`[scanner] DexScreener rate limit hit; cooling down ${Math.ceil(cooldownMs / 1000)}s after ${this.safeUrlForLog(url)}`);
         this.lastRateLimitLogAt = Date.now();
       }
     } catch (error) {
-      console.error('[scanner] Failed to handle DexScreener rate limit:', error.message);
+      logger.error('[scanner] Failed to handle DexScreener rate limit:', error.message);
     }
   }
 
@@ -210,7 +211,7 @@ export default class Scanner {
     try {
       return new Promise((resolve) => setTimeout(resolve, ms));
     } catch (error) {
-      console.error('[scanner] Failed to sleep:', error.message);
+      logger.error('[scanner] Failed to sleep:', error.message);
       return Promise.resolve();
     }
   }
@@ -220,7 +221,7 @@ export default class Scanner {
       const parsed = new URL(url);
       return `${parsed.origin}${parsed.pathname}`;
     } catch (error) {
-      console.error('[scanner] Failed to sanitize URL for log:', error.message);
+      logger.error('[scanner] Failed to sanitize URL for log:', error.message);
       return String(url);
     }
   }
@@ -233,7 +234,7 @@ export default class Scanner {
       }
       return chunks;
     } catch (error) {
-      console.error('[scanner] Failed to chunk items:', error.message);
+      logger.error('[scanner] Failed to chunk items:', error.message);
       return [];
     }
   }
@@ -276,13 +277,13 @@ export default class Scanner {
             byToken.set(candidate.tokenAddress, candidate);
           }
         } catch (error) {
-          console.error('[scanner] Failed to normalize pair:', error.message);
+          logger.error('[scanner] Failed to normalize pair:', error.message);
         }
       }
 
       return [...byToken.values()];
     } catch (error) {
-      console.error('[scanner] Failed to extract candidates:', error.message);
+      logger.error('[scanner] Failed to extract candidates:', error.message);
       return [];
     }
   }
@@ -294,7 +295,7 @@ export default class Scanner {
       if (base.address === CONFIG.SOL_MINT && quote.address) return quote;
       return base.address ? base : quote;
     } catch (error) {
-      console.error('[scanner] Failed to pick trade token:', error.message);
+      logger.error('[scanner] Failed to pick trade token:', error.message);
       return null;
     }
   }
@@ -310,7 +311,7 @@ export default class Scanner {
       const h1 = Number(volume.h1 || 0);
       return h1 > 0 ? h1 : 0;
     } catch (error) {
-      console.error('[scanner] Failed to estimate average volume:', error.message);
+      logger.error('[scanner] Failed to estimate average volume:', error.message);
       return 0;
     }
   }
@@ -321,7 +322,7 @@ export default class Scanner {
         this.feedSocket.close();
       }
     } catch (error) {
-      console.error('[scanner] Failed to close WebSocket feed:', error.message);
+      logger.error('[scanner] Failed to close WebSocket feed:', error.message);
     }
   }
 }

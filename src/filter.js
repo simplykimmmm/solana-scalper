@@ -1,4 +1,5 @@
 import CONFIG from '../config.js';
+import logger from './logger.js';
 
 export function filterCandidate(candidate, positions) {
   try {
@@ -33,7 +34,7 @@ export function filterCandidate(candidate, positions) {
 
     return { passed: true, reason: 'passed filters' };
   } catch (error) {
-    console.error('[filter] Candidate filter failed:', error.message);
+    logger.error('[filter] Candidate filter failed:', error.message);
     return { passed: false, reason: `filter error: ${error.message}` };
   }
 }
