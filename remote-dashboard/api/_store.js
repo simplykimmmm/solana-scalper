@@ -77,10 +77,6 @@ function getRedisConfig() {
 }
 
 function memoryCommand(args) {
-  if (process.env.VERCEL && process.env.ALLOW_MEMORY_BRIDGE !== 'true') {
-    throw new Error('Configure KV_REST_API_URL/KV_REST_API_TOKEN or UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN on Vercel.');
-  }
-
   const store = getMemoryStore();
   const [command, key, value, ttlFlag, ttlSeconds] = args;
   const normalized = String(command || '').toUpperCase();
