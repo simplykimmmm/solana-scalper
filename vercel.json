@@ -16,11 +16,11 @@
   "rewrites": [
     {
       "source": "/",
-      "destination": "/remote-dashboard/index.html"
+      "destination": "/remote-dashboard/index"
     },
     {
       "source": "/index.html",
-      "destination": "/remote-dashboard/index.html"
+      "destination": "/remote-dashboard/index"
     }
   ]
 }
