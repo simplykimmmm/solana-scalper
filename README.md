@@ -33,7 +33,7 @@ Use a dedicated wallet with limited funds. Live memecoin trading is high risk.
 
 ## Remote dashboard
 
-The hosted dashboard lives in `remote-dashboard/`. Deploy that folder as the Vercel project root so the Vercel app only contains the UI and bridge API. The trading bot, wallet key, scanning, scoring, and swapping stay on this laptop.
+The hosted dashboard source lives in `remote-dashboard/`. The root `vercel.json` makes Vercel serve that dashboard even if the GitHub integration is pointed at the repository root. The trading bot, wallet key, scanning, scoring, and swapping stay on this laptop.
 
 Vercel environment variables:
 
