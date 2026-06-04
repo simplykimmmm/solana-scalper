@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import CONFIG from '../config.js';
 import logger from './logger.js';
 
-const SYSTEM_PROMPT = 'You are a permissive Solana micro-scalp evaluator for small trade sizes. Score this token opportunity from 1-10. Liquidity must be at least $5k. Favor early momentum, active volume, and tradable volatility. Assume a quick 30-second scalp by default, but allow a 30-minute momentum ride only when the token shows strong 5-minute pump behavior with enough volume. Respond with ONLY a JSON object: { score: number, reason: string }';
+const SYSTEM_PROMPT = 'You are a permissive Solana micro-scalp evaluator for small trade sizes. Score this token opportunity from 1-10. Liquidity must be at least $5k. Favor early momentum, active volume, and tradable volatility. Assume a quick 30-second scalp by default, but allow a 30-minute momentum ride only when the token shows strong 5-minute pump behavior with enough volume. Respond with ONLY compact JSON: {"score":number,"reason":"short reason under 12 words"}.';
 const BUDGET_FILE_URL = new URL('../data/gemini-usage.json', import.meta.url);
 const geminiBudget = {
   requestsThisRun: 0,
@@ -17,21 +17,25 @@ export async function scoreCandidate(candidate) {
   try {
     if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_key_here') {
       logger.error('[scorer] GEMINI_API_KEY is missing; returning score 0.');
-      return { score: 0, reason: 'missing GEMINI_API_KEY' };
+      return unavailableScore('missing GEMINI_API_KEY');
     }
 
     const prompt = buildPrompt(candidate);
     const budgetResult = await checkGeminiBudget(prompt);
     if (!budgetResult.allowed) {
       logger.error(`[scorer] Gemini budget guard: ${budgetResult.reason}`);
-      return { score: 0, reason: budgetResult.reason };
+      return unavailableScore(budgetResult.reason);
     }
 
     const response = await callGemini(prompt, budgetResult.estimatedTokens);
-    return parseGeminiScore(response);
+    if (!response.ok) {
+      return unavailableScore(response.reason);
+    }
+
+    return parseGeminiScore(response.data);
   } catch (error) {
     logger.error(`[scorer] Scoring failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, { error: error.message });
-    return { score: 0, reason: `scoring failed: ${error.message}` };
+    return unavailableScore(`scoring failed: ${error.message}`);
   }
 }
 
@@ -78,18 +82,19 @@ async function callGemini(prompt, estimatedTokens) {
 
     if (!response.ok) {
       const body = await response.text();
-      logger.error(`[scorer] Gemini HTTP ${response.status}: ${body.slice(0, 200)}`);
+      const reason = buildGeminiHttpReason(response.status, body, response.headers.get('retry-after'));
+      logger.error(`[scorer] Gemini HTTP ${response.status}: ${reason}`);
       await reconcileGeminiTokenUsage(estimatedTokens, 0);
-      return null;
+      return { ok: false, reason };
     }
 
     const data = await response.json();
     await reconcileGeminiTokenUsage(estimatedTokens, extractGeminiUsageTokens(data));
-    return data;
+    return { ok: true, data };
   } catch (error) {
     logger.error('[scorer] Gemini request failed:', { error: error.message });
     await reconcileGeminiTokenUsage(estimatedTokens, 0);
-    return null;
+    return { ok: false, reason: `Gemini request failed: ${error.name === 'AbortError' ? 'timeout' : error.message}` };
   }
 }
 
@@ -253,10 +258,10 @@ function estimateGeminiRequestTokens(prompt) {
   try {
     const inputText = `${SYSTEM_PROMPT}\n${prompt || ''}`;
     const conservativeInputTokens = Math.ceil(inputText.length / 3);
-    return conservativeInputTokens + Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 60);
+    return conservativeInputTokens + Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 120);
   } catch (error) {
     logger.error('[scorer] Failed to estimate Gemini request tokens:', { error: error.message });
-    return Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 60) + 200;
+    return Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 120) + 200;
   }
 }
 
@@ -303,19 +308,96 @@ function buildPrompt(candidate) {
 
 function parseGeminiScore(data) {
   try {
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = extractGeminiText(data);
     if (!text) {
-      return { score: 0, reason: 'empty Gemini response' };
+      const reason = describeEmptyGeminiResponse(data);
+      logger.error('[scorer] Gemini returned no text:', {
+        reason,
+        finishReason: data?.candidates?.[0]?.finishReason || '',
+        promptBlockReason: data?.promptFeedback?.blockReason || ''
+      });
+      return unavailableScore(reason);
     }
 
     const cleaned = text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(cleaned);
     return {
-      score: Number(parsed.score || 0),
-      reason: String(parsed.reason || 'no reason returned')
+      score: Math.max(0, Math.min(10, Number(parsed.score || 0))),
+      reason: String(parsed.reason || 'no reason returned'),
+      cacheable: true
     };
   } catch (error) {
     logger.error('[scorer] Failed to parse Gemini response:', { error: error.message });
-    return { score: 0, reason: `parse failed: ${error.message}` };
+    return unavailableScore(`parse failed: ${error.message}`);
   }
+}
+
+function extractGeminiText(data) {
+  try {
+    const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+    return candidates
+      .flatMap((candidate) => Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [])
+      .map((part) => part?.text || '')
+      .filter(Boolean)
+      .join('')
+      .trim();
+  } catch (error) {
+    logger.error('[scorer] Failed to extract Gemini text:', { error: error.message });
+    return '';
+  }
+}
+
+function describeEmptyGeminiResponse(data) {
+  try {
+    const blockReason = data?.promptFeedback?.blockReason;
+    if (blockReason) return `Gemini prompt blocked: ${blockReason}`;
+
+    const finishReason = data?.candidates?.[0]?.finishReason;
+    if (finishReason) return `Gemini returned no text (finishReason=${finishReason})`;
+
+    return 'Gemini returned no text';
+  } catch (error) {
+    logger.error('[scorer] Failed to describe empty Gemini response:', { error: error.message });
+    return 'Gemini returned no text';
+  }
+}
+
+function buildGeminiHttpReason(status, body, retryAfterHeader) {
+  try {
+    const parsed = JSON.parse(String(body || '{}'));
+    const message = String(parsed?.error?.message || '').replace(/\s+/g, ' ').trim();
+    const statusText = String(parsed?.error?.status || `HTTP ${status}`);
+    const retryAfter = Number(retryAfterHeader || 0);
+
+    if (status === 429) {
+      const modelMatch = message.match(/limit:\s*0,\s*model:\s*([^*\n ]+)/i);
+      const retryMatch = message.match(/retry in\s*([0-9.]+s)/i);
+      const retryNote = retryAfter > 0
+        ? ` retry after ${retryAfter}s`
+        : retryMatch
+          ? ` retry after ${retryMatch[1]}`
+          : '';
+      if (modelMatch) {
+        return `Gemini quota exhausted for ${modelMatch[1]}; switch model or enable billing.${retryNote}`.trim();
+      }
+      return `Gemini quota/rate limit (${statusText}).${retryNote}`.trim();
+    }
+
+    if (message) {
+      return `Gemini ${statusText}: ${message.slice(0, 240)}`;
+    }
+
+    return `Gemini HTTP ${status}`;
+  } catch (error) {
+    logger.error('[scorer] Failed to parse Gemini HTTP error:', { error: error.message });
+    return `Gemini HTTP ${status}`;
+  }
+}
+
+function unavailableScore(reason) {
+  return {
+    score: 0,
+    reason: String(reason || 'Gemini unavailable'),
+    cacheable: false
+  };
 }

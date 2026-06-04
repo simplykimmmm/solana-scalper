@@ -25,6 +25,8 @@ function envNumber(name, defaultValue) {
   }
 }
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+
 const CONFIG = {
   MIN_LIQUIDITY_USD: 5000,
   VOLUME_SPIKE_MULTIPLIER: 1.5,
@@ -34,7 +36,8 @@ const CONFIG = {
   GEMINI_MIN_REQUEST_INTERVAL_MS: envNumber('GEMINI_MIN_REQUEST_INTERVAL_MS', 0),
   GEMINI_DAILY_TOKEN_LIMIT: envNumber('GEMINI_DAILY_TOKEN_LIMIT', 1500),
   GEMINI_DAILY_TOKEN_RESERVE: envNumber('GEMINI_DAILY_TOKEN_RESERVE', 50),
-  GEMINI_MAX_OUTPUT_TOKENS: envNumber('GEMINI_MAX_OUTPUT_TOKENS', 60),
+  GEMINI_MAX_OUTPUT_TOKENS: envNumber('GEMINI_MAX_OUTPUT_TOKENS', 120),
+  GEMINI_MODEL,
   GEMINI_BUDGET_TIME_ZONE: process.env.GEMINI_BUDGET_TIME_ZONE || 'Europe/Luxembourg',
   AI_DECISION_CACHE_MS: envNumber('AI_DECISION_CACHE_MS', 21600000),
   TRADED_TOKEN_COOLDOWN_MS: envNumber('TRADED_TOKEN_COOLDOWN_MS', 21600000),
@@ -87,7 +90,7 @@ const CONFIG = {
   DEXSCREENER_BOOSTS_URL: 'https://api.dexscreener.com/token-boosts/latest/v1',
   DEXSCREENER_TOKEN_URL: 'https://api.dexscreener.com/latest/dex/tokens',
   DEXSCREENER_TOKEN_BATCH_URL: 'https://api.dexscreener.com/tokens/v1/solana',
-  GEMINI_URL: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+  GEMINI_URL: process.env.GEMINI_URL || `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
   JUPITER_QUOTE_URL: 'https://quote-api.jup.ag/v6/quote',
   JUPITER_SWAP_URL: 'https://quote-api.jup.ag/v6/swap'
 };

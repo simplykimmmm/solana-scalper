@@ -295,17 +295,21 @@ async function processCandidate(candidate, monitor, executor, options = {}) {
 async function scoreAndCacheCandidate(candidate) {
   try {
     const scoreResult = await scoreCandidate(candidate);
-    aiDecisionCache.set(candidate.tokenAddress, {
-      scoreResult,
-      symbol: candidate.symbol,
-      firstSeenAt: Date.now(),
-      expiresAt: Date.now() + CONFIG.AI_DECISION_CACHE_MS,
-      tradedAt: 0
-    });
+    if (scoreResult.cacheable !== false) {
+      aiDecisionCache.set(candidate.tokenAddress, {
+        scoreResult,
+        symbol: candidate.symbol,
+        firstSeenAt: Date.now(),
+        expiresAt: Date.now() + CONFIG.AI_DECISION_CACHE_MS,
+        tradedAt: 0
+      });
+    } else {
+      logger.info(`[scan] Did not cache Gemini result for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}: ${scoreResult.reason}`);
+    }
     return scoreResult;
   } catch (error) {
     logger.error(`[index] Failed to score/cache ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, { error: error.message });
-    return { score: 0, reason: `score cache failed: ${error.message}` };
+    return { score: 0, reason: `score cache failed: ${error.message}`, cacheable: false };
   }
 }
 
