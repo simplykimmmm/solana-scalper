@@ -1,8 +1,9 @@
-import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import CONFIG from '../config.js';
+import { isTokenSafe } from './filters/rugCheck.js';
 import logger from './logger.js';
 import { callRpc } from './rpcClient.js';
+import { fetchJson } from './utils/fetchJson.js';
 import { retryWithBackoff } from './utils/retry.js';
 
 const RAYDIUM_PROGRAM_ID = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
@@ -23,7 +24,7 @@ export default class Discovery {
     this.closed = false;
     retryWithBackoff(() => this.connect(), 4, 300)
       .catch((error) => {
-        logger.error('[discovery] Initial Helius connection failed:', error.message);
+        logger.error('[discovery] Initial Helius connection failed:', { error: error.message });
         this.reconnect();
       });
     return true;
@@ -43,7 +44,7 @@ export default class Discovery {
     setTimeout(() => {
       retryWithBackoff(() => this.connect(), 4, 2000)
         .catch((error) => {
-          logger.error('[discovery] Helius reconnect failed:', error.message);
+          logger.error('[discovery] Helius reconnect failed:', { error: error.message });
           if (!this.closed) this.reconnect();
         });
     }, 2000);
@@ -86,12 +87,12 @@ export default class Discovery {
 
       socket.on('message', (message) => {
         this.handleMessage(message).catch((error) => {
-          logger.error('[discovery] Helius message handler failed:', error.message);
+          logger.error('[discovery] Helius message handler failed:', { error: error.message });
         });
       });
 
       socket.on('error', (error) => {
-        logger.error('[discovery] Helius WebSocket error:', error.message);
+        logger.error('[discovery] Helius WebSocket error:', { error: error.message });
         if (!settled) {
           settled = true;
           clearTimeout(settleTimeout);
@@ -138,6 +139,7 @@ export default class Discovery {
 
     const mint = this.extractPoolMint(transaction);
     if (!mint) return;
+    if (!(await isTokenSafe(mint))) return;
 
     const candidate = await this.buildCandidate(mint, signature);
     await this.onCandidate(candidate);
@@ -181,20 +183,7 @@ export default class Discovery {
   async fetchBestDexScreenerPair(mint) {
     try {
       const data = await retryWithBackoff(async () => {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), CONFIG.HTTP_TIMEOUT_MS);
-
-        try {
-          const response = await fetch(`${CONFIG.DEXSCREENER_TOKEN_BATCH_URL}/${encodeURIComponent(mint)}`, {
-            signal: controller.signal
-          });
-          if (!response.ok) {
-            throw new Error(`DexScreener HTTP ${response.status}`);
-          }
-          return await response.json();
-        } finally {
-          clearTimeout(timeout);
-        }
+        return fetchJson(`${CONFIG.DEXSCREENER_TOKEN_BATCH_URL}/${encodeURIComponent(mint)}`);
       });
 
       const pairs = Array.isArray(data) ? data : Array.isArray(data?.pairs) ? data.pairs : [];
@@ -202,7 +191,7 @@ export default class Discovery {
       solanaPairs.sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0));
       return solanaPairs[0] || null;
     } catch (error) {
-      logger.error(`[discovery] Failed to enrich ${mint} from DexScreener:`, error.message);
+      logger.error(`[discovery] Failed to enrich ${mint} from DexScreener:`, { error: error.message });
       return null;
     }
   }

@@ -13,7 +13,7 @@ export async function isTokenSafe(mint) {
     const report = await fetchRugCheckSummary(mint);
     return evaluateReport(report);
   } catch (error) {
-    logger.error(`[rugcheck] Fail-closed for ${mint}:`, error.message);
+    logger.error(`[rugcheck] Fail-closed for ${mint}:`, { error: error.message });
     return false;
   }
 }

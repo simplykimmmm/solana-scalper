@@ -13,15 +13,15 @@ import { isTokenSafe } from './filters/rugCheck.js';
 import { getGeminiBudgetStatus, scoreCandidate } from './scorer.js';
 import Executor from './executor.js';
 import Monitor from './monitor.js';
-import { insertTrade } from './db.js';
+import RemoteBridge from './remoteBridge.js';
+import { getDailyPnl, getTradesByMint, insertTrade } from './db.js';
 import logger from './logger.js';
 import { callRpc } from './rpcClient.js';
 import {
   canOpenPosition,
   getStateSnapshot,
   isDailyLimitBreached,
-  openPosition as openStatePosition,
-  recordTrade
+  openPosition as openStatePosition
 } from './state.js';
 
 dotenv.config();
@@ -31,16 +31,20 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
 let isScanning = false;
+let isDiscoveryProcessing = false;
 let shuttingDown = false;
 let scanInterval = null;
 let server = null;
 let discovery = null;
+let remoteBridge = null;
+let usingTemporarySimulationWallet = false;
 const aiDecisionCache = new Map();
 const scanActivityLog = [];
 const SCAN_ACTIVITY_LOG_LIMIT = 100;
 const botState = {
   paused: false,
   lastControlAction: 'started',
+  lastControlSource: 'local',
   updatedAt: Date.now()
 };
 
@@ -48,17 +52,17 @@ async function main() {
   try {
     process.on('unhandledRejection', (reason) => {
       try {
-        logger.error('[index] Unhandled promise rejection caught:', reason);
+        logger.error('[index] Unhandled promise rejection caught:', { reason });
       } catch (error) {
-        logger.error('[index] Failed to log unhandled rejection:', error.message);
+        logger.error('[index] Failed to log unhandled rejection:', { error: error.message });
       }
     });
 
     process.on('uncaughtException', (error) => {
       try {
-        logger.error('[index] Uncaught exception caught:', error.message);
+        logger.error('[index] Uncaught exception caught:', { error: error.message });
       } catch (handlerError) {
-        logger.error('[index] Failed to log uncaught exception:', handlerError.message);
+        logger.error('[index] Failed to log uncaught exception:', { error: handlerError.message });
       }
     });
 
@@ -75,7 +79,8 @@ async function main() {
     const monitor = new Monitor(executor, connection);
     monitor.start();
 
-    server = startDashboardServer(monitor);
+    server = startDashboardServer(monitor, wallet);
+    remoteBridge = startRemoteBridge(monitor, wallet);
 
     const runScan = async () => {
       try {
@@ -83,7 +88,7 @@ async function main() {
         isScanning = true;
         await scanAndTrade(scanner, monitor, executor);
       } catch (error) {
-        logger.error('[index] Scan loop failed:', error.message);
+        logger.error('[index] Scan loop failed:', { error: error.message });
       } finally {
         isScanning = false;
       }
@@ -104,17 +109,17 @@ async function main() {
       scanInterval = setInterval(() => {
         try {
           runScan().catch((error) => {
-            logger.error('[index] Scheduled scan promise failed:', error.message);
+            logger.error('[index] Scheduled scan promise failed:', { error: error.message });
           });
         } catch (error) {
-          logger.error('[index] Scheduled scan failed:', error.message);
+          logger.error('[index] Scheduled scan failed:', { error: error.message });
         }
       }, CONFIG.SCAN_INTERVAL_MS);
     }
 
     registerShutdownHandlers(scanner, monitor);
   } catch (error) {
-    logger.error('[index] Startup failed:', error.message);
+    logger.error('[index] Startup failed:', { error: error.message });
     process.exitCode = 1;
   }
 }
@@ -125,6 +130,7 @@ function loadWallet() {
 
     if (!privateKey || privateKey === 'your_base58_private_key_here') {
       if (CONFIG.SIMULATION_MODE) {
+        usingTemporarySimulationWallet = true;
         logger.info('[startup] PRIVATE_KEY missing; generated temporary simulation wallet.');
         return Keypair.generate();
       }
@@ -133,39 +139,40 @@ function loadWallet() {
     }
 
     const secretKey = bs58.decode(privateKey);
+    usingTemporarySimulationWallet = false;
     return Keypair.fromSecretKey(secretKey);
   } catch (error) {
-    logger.error('[startup] Failed to load wallet from PRIVATE_KEY:', error.message);
+    logger.error('[startup] Failed to load wallet from PRIVATE_KEY:', { error: error.message });
     process.exit(1);
   }
 }
 
 async function getStartupBalance(wallet) {
   try {
-    if (CONFIG.SIMULATION_MODE) return 0;
+    if (CONFIG.SIMULATION_MODE) return Math.floor(CONFIG.SIMULATION_BALANCE_SOL * 1e9);
     const balance = await callRpc('getBalance', [
       wallet.publicKey.toBase58(),
       { commitment: 'confirmed' }
     ]);
     return Number(balance?.value || 0);
   } catch (error) {
-    logger.error('[startup] Failed to fetch wallet SOL balance:', error.message);
+    logger.error('[startup] Failed to fetch wallet SOL balance:', { error: error.message });
     return 0;
   }
 }
 
 async function processDiscoveryCandidate(candidate, monitor, executor) {
   try {
-    if (isScanning || shuttingDown || botState.paused) return;
-    isScanning = true;
+    if (isDiscoveryProcessing || shuttingDown || botState.paused) return;
+    isDiscoveryProcessing = true;
     await processCandidate(candidate, monitor, executor, {
       skipMarketFilter: true,
       source: 'helius'
     });
   } catch (error) {
-    logger.error(`[index] Discovery candidate processing failed for ${candidate?.symbol || 'unknown'}:`, error.message);
+    logger.error(`[index] Discovery candidate processing failed for ${candidate?.symbol || 'unknown'}:`, { error: error.message });
   } finally {
-    isScanning = false;
+    isDiscoveryProcessing = false;
   }
 }
 
@@ -189,11 +196,11 @@ async function scanAndTrade(scanner, monitor, executor) {
           source: 'dexscreener'
         });
       } catch (error) {
-        logger.error(`[index] Candidate processing failed for ${candidate?.symbol || 'unknown'}:`, error.message);
+        logger.error(`[index] Candidate processing failed for ${candidate?.symbol || 'unknown'}:`, { error: error.message });
       }
     }
   } catch (error) {
-    logger.error('[index] scanAndTrade failed:', error.message);
+    logger.error('[index] scanAndTrade failed:', { error: error.message });
   }
 }
 
@@ -276,7 +283,6 @@ async function processCandidate(candidate, monitor, executor, options = {}) {
       tx_signature: buyResult.txSignature,
       timestamp: Date.now()
     });
-    recordTrade(0);
     openStatePosition(candidate.tokenAddress);
     monitor.addPosition(candidate, buyResult);
     recordScanActivity('BUY_SUCCESS', candidate, `tx=${buyResult.txSignature}`, scoreResult.score);
@@ -298,7 +304,7 @@ async function scoreAndCacheCandidate(candidate) {
     });
     return scoreResult;
   } catch (error) {
-    logger.error(`[index] Failed to score/cache ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, error.message);
+    logger.error(`[index] Failed to score/cache ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, { error: error.message });
     return { score: 0, reason: `score cache failed: ${error.message}` };
   }
 }
@@ -319,7 +325,7 @@ function getCachedAiDecision(tokenAddress) {
 
     return cached;
   } catch (error) {
-    logger.error(`[index] Failed to read AI decision cache for ${tokenAddress}:`, error.message);
+    logger.error(`[index] Failed to read AI decision cache for ${tokenAddress}:`, { error: error.message });
     return null;
   }
 }
@@ -333,51 +339,78 @@ function markAiDecisionTraded(tokenAddress) {
       aiDecisionCache.set(tokenAddress, cached);
     }
   } catch (error) {
-    logger.error(`[index] Failed to mark AI decision traded for ${tokenAddress}:`, error.message);
+    logger.error(`[index] Failed to mark AI decision traded for ${tokenAddress}:`, { error: error.message });
   }
 }
 
-function startDashboardServer(monitor) {
+function startRemoteBridge(monitor, wallet) {
+  try {
+    const bridge = new RemoteBridge({
+      getStatus: () => buildStatusPayload(monitor, wallet),
+      onCommand: async (command) => {
+        applyControlAction(command.action, 'remote');
+      }
+    });
+    bridge.start();
+    return bridge;
+  } catch (error) {
+    logger.error('[remote] Failed to initialize remote bridge:', { error: error.message });
+    return null;
+  }
+}
+
+function startDashboardServer(monitor, wallet) {
   try {
     const app = express();
     const dashboardDir = path.join(rootDir, 'dashboard');
 
     app.get('/api/status', async (req, res) => {
       try {
-        const status = await monitor.getStatus();
-        status.bot = getBotStatus();
-        status.tradingState = getStateSnapshot();
-        status.geminiBudget = await getGeminiBudgetStatus();
-        status.scanActivityLog = scanActivityLog.slice(0, SCAN_ACTIVITY_LOG_LIMIT);
-        res.json(status);
+        res.json(await buildStatusPayload(monitor, wallet));
       } catch (error) {
-        logger.error('[dashboard] Failed to serve /api/status:', error.message);
+        logger.error('[dashboard] Failed to serve /api/status:', { error: error.message });
         res.status(500).json({ error: 'status unavailable' });
+      }
+    });
+
+    app.get('/api/trades', (req, res) => {
+      try {
+        const mint = String(req.query.mint || '').trim();
+        const date = String(req.query.date || '').trim();
+
+        if (mint) {
+          res.json(getTradesByMint(mint));
+          return;
+        }
+
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          res.json({ pnlSol: getDailyPnl(date) });
+          return;
+        }
+
+        res.status(400).json({ error: 'Provide ?mint=<address> or ?date=<YYYY-MM-DD>.' });
+      } catch (error) {
+        logger.error('[dashboard] Failed to serve /api/trades:', { error: error.message });
+        res.status(500).json({ error: 'trades unavailable' });
       }
     });
 
     app.post('/api/control/start', (req, res) => {
       try {
-        botState.paused = false;
-        botState.lastControlAction = 'started';
-        botState.updatedAt = Date.now();
-        logger.info('[control] Bot started from dashboard.');
-        res.json({ success: true, bot: getBotStatus() });
+        const bot = applyControlAction('start', 'local-dashboard');
+        res.json({ success: true, bot });
       } catch (error) {
-        logger.error('[dashboard] Failed to start bot:', error.message);
+        logger.error('[dashboard] Failed to start bot:', { error: error.message });
         res.status(500).json({ success: false, error: 'start failed' });
       }
     });
 
     app.post('/api/control/stop', (req, res) => {
       try {
-        botState.paused = true;
-        botState.lastControlAction = 'stopped';
-        botState.updatedAt = Date.now();
-        logger.info('[control] Bot stopped from dashboard. New scans and buys are paused.');
-        res.json({ success: true, bot: getBotStatus() });
+        const bot = applyControlAction('stop', 'local-dashboard');
+        res.json({ success: true, bot });
       } catch (error) {
-        logger.error('[dashboard] Failed to stop bot:', error.message);
+        logger.error('[dashboard] Failed to stop bot:', { error: error.message });
         res.status(500).json({ success: false, error: 'stop failed' });
       }
     });
@@ -388,15 +421,65 @@ function startDashboardServer(monitor) {
       try {
         logger.info(`[dashboard] http://localhost:${CONFIG.DASHBOARD_PORT}`);
       } catch (error) {
-        logger.error('[dashboard] Failed to log dashboard URL:', error.message);
+        logger.error('[dashboard] Failed to log dashboard URL:', { error: error.message });
       }
     });
 
     return startedServer;
   } catch (error) {
-    logger.error('[dashboard] Failed to start dashboard server:', error.message);
+    logger.error('[dashboard] Failed to start dashboard server:', { error: error.message });
     return null;
   }
+}
+
+async function buildStatusPayload(monitor, wallet) {
+  const status = await monitor.getStatus();
+  status.bot = getBotStatus();
+  status.tradingState = getStateSnapshot();
+  status.geminiBudget = await getGeminiBudgetStatus();
+  status.scanActivityLog = scanActivityLog.slice(0, SCAN_ACTIVITY_LOG_LIMIT);
+  status.wallet = getWalletStatus(wallet);
+  return status;
+}
+
+function getWalletStatus(wallet) {
+  try {
+    const publicKey = wallet?.publicKey?.toBase58?.() || '';
+    return {
+      publicKey,
+      topUpAddress: usingTemporarySimulationWallet ? '' : publicKey,
+      temporary: Boolean(usingTemporarySimulationWallet),
+      explorerUrl: publicKey ? `https://solscan.io/account/${publicKey}` : ''
+    };
+  } catch (error) {
+    logger.error('[dashboard] Failed to build wallet status:', { error: error.message });
+    return {
+      publicKey: '',
+      topUpAddress: '',
+      temporary: false,
+      explorerUrl: ''
+    };
+  }
+}
+
+function applyControlAction(action, source = 'local') {
+  const normalized = String(action || '').toLowerCase();
+  if (!['start', 'stop'].includes(normalized)) {
+    throw new Error(`Unknown control action: ${action}`);
+  }
+
+  botState.paused = normalized === 'stop';
+  botState.lastControlAction = normalized === 'start' ? 'started' : 'stopped';
+  botState.lastControlSource = source;
+  botState.updatedAt = Date.now();
+
+  if (normalized === 'start') {
+    logger.info(`[control] Bot started from ${source}.`);
+  } else {
+    logger.info(`[control] Bot stopped from ${source}. New scans and buys are paused.`);
+  }
+
+  return getBotStatus();
 }
 
 function getBotStatus() {
@@ -405,20 +488,24 @@ function getBotStatus() {
       running: !botState.paused && !shuttingDown,
       paused: Boolean(botState.paused),
       isScanning: Boolean(isScanning),
+      isDiscoveryProcessing: Boolean(isDiscoveryProcessing),
       shuttingDown: Boolean(shuttingDown),
       heliusEnabled: Boolean(CONFIG.HELIUS_API_KEY),
       lastControlAction: String(botState.lastControlAction),
+      lastControlSource: String(botState.lastControlSource || 'unknown'),
       updatedAt: Number(botState.updatedAt)
     };
   } catch (error) {
-    logger.error('[dashboard] Failed to build bot status:', error.message);
+    logger.error('[dashboard] Failed to build bot status:', { error: error.message });
     return {
       running: false,
       paused: true,
       isScanning: false,
+      isDiscoveryProcessing: false,
       shuttingDown: Boolean(shuttingDown),
       heliusEnabled: Boolean(CONFIG.HELIUS_API_KEY),
       lastControlAction: 'unknown',
+      lastControlSource: 'unknown',
       updatedAt: Date.now()
     };
   }
@@ -442,7 +529,7 @@ function recordScanActivity(action, candidate, reason, score = null) {
       scanActivityLog.length = SCAN_ACTIVITY_LOG_LIMIT;
     }
   } catch (error) {
-    logger.error('[scan] Failed to record scan activity:', error.message);
+    logger.error('[scan] Failed to record scan activity:', { error: error.message });
   }
 }
 
@@ -454,6 +541,7 @@ function registerShutdownHandlers(scanner, monitor) {
         shuttingDown = true;
         logger.info(`[shutdown] ${signal} received; writing state and closing positions before exit.`);
         if (scanInterval) clearInterval(scanInterval);
+        if (remoteBridge) remoteBridge.stop();
         await writeShutdownState(signal, monitor);
         if (discovery) discovery.close();
         scanner.close();
@@ -462,7 +550,7 @@ function registerShutdownHandlers(scanner, monitor) {
         await closeDashboardServer();
         process.exit(0);
       } catch (error) {
-        logger.error('[shutdown] Graceful shutdown failed:', error.message);
+        logger.error('[shutdown] Graceful shutdown failed:', { error: error.message });
         process.exit(1);
       }
     };
@@ -470,24 +558,24 @@ function registerShutdownHandlers(scanner, monitor) {
     process.on('SIGINT', () => {
       try {
         shutdown('SIGINT').catch((error) => {
-          logger.error('[shutdown] SIGINT handler promise failed:', error.message);
+          logger.error('[shutdown] SIGINT handler promise failed:', { error: error.message });
         });
       } catch (error) {
-        logger.error('[shutdown] SIGINT handler failed:', error.message);
+        logger.error('[shutdown] SIGINT handler failed:', { error: error.message });
       }
     });
 
     process.on('SIGTERM', () => {
       try {
         shutdown('SIGTERM').catch((error) => {
-          logger.error('[shutdown] SIGTERM handler promise failed:', error.message);
+          logger.error('[shutdown] SIGTERM handler promise failed:', { error: error.message });
         });
       } catch (error) {
-        logger.error('[shutdown] SIGTERM handler failed:', error.message);
+        logger.error('[shutdown] SIGTERM handler failed:', { error: error.message });
       }
     });
   } catch (error) {
-    logger.error('[shutdown] Failed to register shutdown handlers:', error.message);
+    logger.error('[shutdown] Failed to register shutdown handlers:', { error: error.message });
   }
 }
 
@@ -517,7 +605,7 @@ async function closeDashboardServer() {
 
   await new Promise((resolve) => {
     server.close((error) => {
-      if (error) logger.error('[shutdown] Dashboard server close failed:', error.message);
+      if (error) logger.error('[shutdown] Dashboard server close failed:', { error: error.message });
       resolve();
     });
   });
@@ -525,10 +613,10 @@ async function closeDashboardServer() {
 
 main().catch((error) => {
   try {
-    logger.error('[index] Main promise failed:', error.message);
+    logger.error('[index] Main promise failed:', { error: error.message });
     process.exitCode = 1;
   } catch (handlerError) {
-    logger.error('[index] Failed to log main promise error:', handlerError.message);
+    logger.error('[index] Failed to log main promise error:', { error: handlerError.message });
     process.exitCode = 1;
   }
 });

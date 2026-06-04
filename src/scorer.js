@@ -30,7 +30,7 @@ export async function scoreCandidate(candidate) {
     const response = await callGemini(prompt, budgetResult.estimatedTokens);
     return parseGeminiScore(response);
   } catch (error) {
-    logger.error(`[scorer] Scoring failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, error.message);
+    logger.error(`[scorer] Scoring failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, { error: error.message });
     return { score: 0, reason: `scoring failed: ${error.message}` };
   }
 }
@@ -46,7 +46,7 @@ async function callGemini(prompt, estimatedTokens) {
       try {
         controller.abort();
       } catch (error) {
-        logger.error('[scorer] Failed to abort timed-out Gemini request:', error.message);
+        logger.error('[scorer] Failed to abort timed-out Gemini request:', { error: error.message });
       }
     }, CONFIG.HTTP_TIMEOUT_MS);
 
@@ -87,7 +87,7 @@ async function callGemini(prompt, estimatedTokens) {
     await reconcileGeminiTokenUsage(estimatedTokens, extractGeminiUsageTokens(data));
     return data;
   } catch (error) {
-    logger.error('[scorer] Gemini request failed:', error.message);
+    logger.error('[scorer] Gemini request failed:', { error: error.message });
     await reconcileGeminiTokenUsage(estimatedTokens, 0);
     return null;
   }
@@ -133,7 +133,7 @@ async function checkGeminiBudget(prompt) {
 
     return { allowed: true, reason: 'within Gemini request budget', estimatedTokens };
   } catch (error) {
-    logger.error('[scorer] Failed to check Gemini budget:', error.message);
+    logger.error('[scorer] Failed to check Gemini budget:', { error: error.message });
     return { allowed: false, reason: `Gemini budget check failed: ${error.message}`, estimatedTokens: 0 };
   }
 }
@@ -156,7 +156,7 @@ export async function getGeminiBudgetStatus() {
       maxOutputTokens: Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS)
     };
   } catch (error) {
-    logger.error('[scorer] Failed to build Gemini budget status:', error.message);
+    logger.error('[scorer] Failed to build Gemini budget status:', { error: error.message });
     return {
       enabled: Boolean(CONFIG.GEMINI_BUDGET_MODE),
       dayKey: '',
@@ -187,7 +187,7 @@ async function loadGeminiBudget() {
       persisted = JSON.parse(await fs.readFile(BUDGET_FILE_URL, 'utf8'));
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        logger.error('[scorer] Failed to read Gemini budget file:', error.message);
+        logger.error('[scorer] Failed to read Gemini budget file:', { error: error.message });
       }
     }
 
@@ -196,7 +196,7 @@ async function loadGeminiBudget() {
     geminiBudget.loaded = true;
     await saveGeminiBudget();
   } catch (error) {
-    logger.error('[scorer] Failed to load Gemini budget:', error.message);
+    logger.error('[scorer] Failed to load Gemini budget:', { error: error.message });
   }
 }
 
@@ -209,7 +209,7 @@ async function saveGeminiBudget() {
       updatedAt: new Date().toISOString()
     }, null, 2));
   } catch (error) {
-    logger.error('[scorer] Failed to save Gemini budget:', error.message);
+    logger.error('[scorer] Failed to save Gemini budget:', { error: error.message });
   }
 }
 
@@ -221,7 +221,7 @@ async function addGeminiTokenUsage(tokens, reason) {
     await saveGeminiBudget();
     logger.info(`[scorer] Gemini token budget +${amount} (${reason}); used ${geminiBudget.tokensUsedToday}/${getGeminiUsableDailyTokens()} today.`);
   } catch (error) {
-    logger.error('[scorer] Failed to add Gemini token usage:', error.message);
+    logger.error('[scorer] Failed to add Gemini token usage:', { error: error.message });
   }
 }
 
@@ -236,7 +236,7 @@ async function reconcileGeminiTokenUsage(estimatedTokens, actualTokens) {
     await saveGeminiBudget();
     logger.info(`[scorer] Gemini actual token usage ${actual}; adjusted ${delta >= 0 ? '+' : ''}${delta}.`);
   } catch (error) {
-    logger.error('[scorer] Failed to reconcile Gemini token usage:', error.message);
+    logger.error('[scorer] Failed to reconcile Gemini token usage:', { error: error.message });
   }
 }
 
@@ -244,7 +244,7 @@ function extractGeminiUsageTokens(data) {
   try {
     return Number(data?.usageMetadata?.totalTokenCount || 0);
   } catch (error) {
-    logger.error('[scorer] Failed to extract Gemini usage tokens:', error.message);
+    logger.error('[scorer] Failed to extract Gemini usage tokens:', { error: error.message });
     return 0;
   }
 }
@@ -255,7 +255,7 @@ function estimateGeminiRequestTokens(prompt) {
     const conservativeInputTokens = Math.ceil(inputText.length / 3);
     return conservativeInputTokens + Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 60);
   } catch (error) {
-    logger.error('[scorer] Failed to estimate Gemini request tokens:', error.message);
+    logger.error('[scorer] Failed to estimate Gemini request tokens:', { error: error.message });
     return Number(CONFIG.GEMINI_MAX_OUTPUT_TOKENS || 60) + 200;
   }
 }
@@ -264,7 +264,7 @@ function getGeminiUsableDailyTokens() {
   try {
     return Math.max(0, Number(CONFIG.GEMINI_DAILY_TOKEN_LIMIT) - Number(CONFIG.GEMINI_DAILY_TOKEN_RESERVE));
   } catch (error) {
-    logger.error('[scorer] Failed to calculate usable Gemini tokens:', error.message);
+    logger.error('[scorer] Failed to calculate usable Gemini tokens:', { error: error.message });
     return 0;
   }
 }
@@ -279,7 +279,7 @@ function getBudgetDayKey() {
     });
     return formatter.format(new Date());
   } catch (error) {
-    logger.error('[scorer] Failed to build budget day key:', error.message);
+    logger.error('[scorer] Failed to build budget day key:', { error: error.message });
     return new Date().toISOString().slice(0, 10);
   }
 }
@@ -296,7 +296,7 @@ function buildPrompt(candidate) {
       priceChange5m: Number(candidate.priceChange5m || 0)
     });
   } catch (error) {
-    logger.error('[scorer] Failed to build Gemini prompt:', error.message);
+    logger.error('[scorer] Failed to build Gemini prompt:', { error: error.message });
     return '{}';
   }
 }
@@ -315,7 +315,7 @@ function parseGeminiScore(data) {
       reason: String(parsed.reason || 'no reason returned')
     };
   } catch (error) {
-    logger.error('[scorer] Failed to parse Gemini response:', error.message);
+    logger.error('[scorer] Failed to parse Gemini response:', { error: error.message });
     return { score: 0, reason: `parse failed: ${error.message}` };
   }
 }

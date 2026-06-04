@@ -30,3 +30,33 @@ PRIVATE_KEY=your_wallet_private_key
 ```
 
 Use a dedicated wallet with limited funds. Live memecoin trading is high risk.
+
+## Remote dashboard
+
+The hosted dashboard lives in `remote-dashboard/`. Deploy that folder as the Vercel project root so the Vercel app only contains the UI and bridge API. The trading bot, wallet key, scanning, scoring, and swapping stay on this laptop.
+
+Vercel environment variables:
+
+```text
+REMOTE_BRIDGE_TOKEN=a-long-random-token-you-choose
+KV_REST_API_URL=from Vercel KV or Upstash Redis
+KV_REST_API_TOKEN=from Vercel KV or Upstash Redis
+```
+
+The API also accepts Upstash's native names:
+
+```text
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+```
+
+Local `.env` variables:
+
+```text
+REMOTE_BRIDGE_URL=https://your-vercel-app.vercel.app
+REMOTE_BRIDGE_TOKEN=the-same-long-random-token
+REMOTE_BRIDGE_AGENT_ID=laptop-main
+REMOTE_BRIDGE_POLL_MS=3000
+```
+
+Open the Vercel URL, enter the bridge token in the dashboard, and the page will show the latest laptop status. Start/Stop pauses or resumes new scans and buys; the local Node process must stay running for remote control to work. The top-up panel shows the wallet public address so you can send SOL to it from an exchange or wallet. If `PRIVATE_KEY` is missing and the bot generated a temporary simulation wallet, top-up copying is disabled.

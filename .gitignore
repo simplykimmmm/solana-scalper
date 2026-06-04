@@ -5,3 +5,5 @@ shutdown_state.json
 node_modules/
 npm-debug.log*
 .DS_Store
+remote-dashboard/.vercel/
+remote-dashboard/.env.local

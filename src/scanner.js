@@ -1,7 +1,7 @@
-import fetch from 'node-fetch';
 import WebSocket from 'ws';
 import CONFIG from '../config.js';
 import logger from './logger.js';
+import { fetchJson } from './utils/fetchJson.js';
 
 export default class Scanner {
   constructor() {
@@ -15,7 +15,7 @@ export default class Scanner {
       this.dexScreenerCooldownUntil = 0;
       this.lastRateLimitLogAt = 0;
     } catch (error) {
-      logger.error('[scanner] Failed to initialize scanner:', error.message);
+      logger.error('[scanner] Failed to initialize scanner:', { error: error.message });
     }
   }
 
@@ -31,7 +31,7 @@ export default class Scanner {
         try {
           logger.info('[scanner] DexScreener WebSocket feed connected.');
         } catch (error) {
-          logger.error('[scanner] WebSocket open handler failed:', error.message);
+          logger.error('[scanner] WebSocket open handler failed:', { error: error.message });
         }
       });
       this.feedSocket.on('message', (message) => {
@@ -40,25 +40,25 @@ export default class Scanner {
           this.feedEvents.push(parsed);
           if (this.feedEvents.length > 100) this.feedEvents.shift();
         } catch (error) {
-          logger.error('[scanner] Failed to parse WebSocket message:', error.message);
+          logger.error('[scanner] Failed to parse WebSocket message:', { error: error.message });
         }
       });
       this.feedSocket.on('error', (error) => {
         try {
-          logger.error('[scanner] DexScreener WebSocket error:', error.message);
+          logger.error('[scanner] DexScreener WebSocket error:', { error: error.message });
         } catch (handlerError) {
-          logger.error('[scanner] WebSocket error handler failed:', handlerError.message);
+          logger.error('[scanner] WebSocket error handler failed:', { error: handlerError.message });
         }
       });
       this.feedSocket.on('close', () => {
         try {
           logger.info('[scanner] DexScreener WebSocket feed closed.');
         } catch (error) {
-          logger.error('[scanner] WebSocket close handler failed:', error.message);
+          logger.error('[scanner] WebSocket close handler failed:', { error: error.message });
         }
       });
     } catch (error) {
-      logger.error('[scanner] Failed to start optional WebSocket feed:', error.message);
+      logger.error('[scanner] Failed to start optional WebSocket feed:', { error: error.message });
     }
   }
 
@@ -70,17 +70,17 @@ export default class Scanner {
       this.lastCandidates = candidates;
       return candidates;
     } catch (error) {
-      logger.error('[scanner] Scan failed:', error.message);
+      logger.error('[scanner] Scan failed:', { error: error.message });
       return [];
     }
   }
 
   async fetchLatestTokenPairs() {
     try {
-      const data = await this.fetchJson(CONFIG.DEXSCREENER_TOKENS_URL);
+      const data = await this.requestDexScreenerJson(CONFIG.DEXSCREENER_TOKENS_URL);
       return Array.isArray(data?.pairs) ? data.pairs : [];
     } catch (error) {
-      logger.error('[scanner] Failed to fetch latest DexScreener token pairs:', error.message);
+      logger.error('[scanner] Failed to fetch latest DexScreener token pairs:', { error: error.message });
       return [];
     }
   }
@@ -91,7 +91,7 @@ export default class Scanner {
         return this.boostPairsCache;
       }
 
-      const data = await this.fetchJson(CONFIG.DEXSCREENER_BOOSTS_URL);
+      const data = await this.requestDexScreenerJson(CONFIG.DEXSCREENER_BOOSTS_URL);
       if (!data && this.boostPairsCache.length) {
         return this.boostPairsCache;
       }
@@ -107,7 +107,7 @@ export default class Scanner {
       this.boostPairsCacheExpiresAt = Date.now() + CONFIG.DEXSCREENER_BOOST_CACHE_MS;
       return pairs;
     } catch (error) {
-      logger.error('[scanner] Failed to fetch boosted DexScreener tokens:', error.message);
+      logger.error('[scanner] Failed to fetch boosted DexScreener tokens:', { error: error.message });
       return [];
     }
   }
@@ -124,52 +124,33 @@ export default class Scanner {
       for (const chunk of chunks) {
         try {
           const url = `${CONFIG.DEXSCREENER_TOKEN_BATCH_URL}/${chunk.join(',')}`;
-          const data = await this.fetchJson(url);
+          const data = await this.requestDexScreenerJson(url);
           if (Array.isArray(data)) {
             allPairs.push(...data);
           } else if (Array.isArray(data?.pairs)) {
             allPairs.push(...data.pairs);
           }
         } catch (error) {
-          logger.error('[scanner] Failed to fetch boosted token batch:', error.message);
+          logger.error('[scanner] Failed to fetch boosted token batch:', { error: error.message });
         }
       }
 
       return allPairs;
     } catch (error) {
-      logger.error('[scanner] Failed to fetch token pairs by addresses:', error.message);
+      logger.error('[scanner] Failed to fetch token pairs by addresses:', { error: error.message });
       return [];
     }
   }
 
-  async fetchJson(url) {
+  async requestDexScreenerJson(url) {
     try {
       await this.waitForDexScreenerSlot();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        try {
-          controller.abort();
-        } catch (error) {
-          logger.error('[scanner] Failed to abort timed-out request:', error.message);
-        }
-      }, CONFIG.HTTP_TIMEOUT_MS);
-
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeout);
-
-      if (response.status === 429) {
-        this.handleRateLimit(response, url);
-        return null;
-      }
-
-      if (!response.ok) {
-        logger.error(`[scanner] HTTP ${response.status} for ${this.safeUrlForLog(url)}`);
-        return null;
-      }
-
-      return await response.json();
+      return await fetchJson(url);
     } catch (error) {
-      logger.error(`[scanner] Failed to fetch JSON from ${url}:`, error.message);
+      if (error.status === 429) {
+        this.handleRateLimit(error.retryAfter, url);
+      }
+      logger.error(`[scanner] Failed to fetch JSON from ${url}:`, { error: error.message });
       return null;
     }
   }
@@ -188,13 +169,13 @@ export default class Scanner {
 
       this.nextDexScreenerRequestAt = Date.now() + CONFIG.DEXSCREENER_REQUEST_SPACING_MS;
     } catch (error) {
-      logger.error('[scanner] Failed while waiting for DexScreener request slot:', error.message);
+      logger.error('[scanner] Failed while waiting for DexScreener request slot:', { error: error.message });
     }
   }
 
-  handleRateLimit(response, url) {
+  handleRateLimit(retryAfterHeader, url) {
     try {
-      const retryAfter = Number(response.headers.get('retry-after') || 0);
+      const retryAfter = Number(retryAfterHeader || 0);
       const cooldownMs = retryAfter > 0 ? retryAfter * 1000 : CONFIG.DEXSCREENER_429_COOLDOWN_MS;
       this.dexScreenerCooldownUntil = Date.now() + cooldownMs;
 
@@ -203,7 +184,7 @@ export default class Scanner {
         this.lastRateLimitLogAt = Date.now();
       }
     } catch (error) {
-      logger.error('[scanner] Failed to handle DexScreener rate limit:', error.message);
+      logger.error('[scanner] Failed to handle DexScreener rate limit:', { error: error.message });
     }
   }
 
@@ -211,7 +192,7 @@ export default class Scanner {
     try {
       return new Promise((resolve) => setTimeout(resolve, ms));
     } catch (error) {
-      logger.error('[scanner] Failed to sleep:', error.message);
+      logger.error('[scanner] Failed to sleep:', { error: error.message });
       return Promise.resolve();
     }
   }
@@ -221,7 +202,7 @@ export default class Scanner {
       const parsed = new URL(url);
       return `${parsed.origin}${parsed.pathname}`;
     } catch (error) {
-      logger.error('[scanner] Failed to sanitize URL for log:', error.message);
+      logger.error('[scanner] Failed to sanitize URL for log:', { error: error.message });
       return String(url);
     }
   }
@@ -234,7 +215,7 @@ export default class Scanner {
       }
       return chunks;
     } catch (error) {
-      logger.error('[scanner] Failed to chunk items:', error.message);
+      logger.error('[scanner] Failed to chunk items:', { error: error.message });
       return [];
     }
   }
@@ -277,13 +258,13 @@ export default class Scanner {
             byToken.set(candidate.tokenAddress, candidate);
           }
         } catch (error) {
-          logger.error('[scanner] Failed to normalize pair:', error.message);
+          logger.error('[scanner] Failed to normalize pair:', { error: error.message });
         }
       }
 
       return [...byToken.values()];
     } catch (error) {
-      logger.error('[scanner] Failed to extract candidates:', error.message);
+      logger.error('[scanner] Failed to extract candidates:', { error: error.message });
       return [];
     }
   }
@@ -295,7 +276,7 @@ export default class Scanner {
       if (base.address === CONFIG.SOL_MINT && quote.address) return quote;
       return base.address ? base : quote;
     } catch (error) {
-      logger.error('[scanner] Failed to pick trade token:', error.message);
+      logger.error('[scanner] Failed to pick trade token:', { error: error.message });
       return null;
     }
   }
@@ -311,7 +292,7 @@ export default class Scanner {
       const h1 = Number(volume.h1 || 0);
       return h1 > 0 ? h1 : 0;
     } catch (error) {
-      logger.error('[scanner] Failed to estimate average volume:', error.message);
+      logger.error('[scanner] Failed to estimate average volume:', { error: error.message });
       return 0;
     }
   }
@@ -322,7 +303,7 @@ export default class Scanner {
         this.feedSocket.close();
       }
     } catch (error) {
-      logger.error('[scanner] Failed to close WebSocket feed:', error.message);
+      logger.error('[scanner] Failed to close WebSocket feed:', { error: error.message });
     }
   }
 }

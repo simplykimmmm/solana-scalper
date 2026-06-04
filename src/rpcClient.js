@@ -25,7 +25,7 @@ export async function callRpc(method, params = []) {
       );
     } catch (error) {
       lastError = error;
-      logger.error(`[rpc] ${method} failed on ${safeRpcUrl(url)}:`, error.message);
+      logger.error(`[rpc] ${method} failed on ${safeRpcUrl(url)}:`, { error: error.message });
     }
   }
 

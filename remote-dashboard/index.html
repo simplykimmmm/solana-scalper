@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solana Scalper Remote</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08090d;
+        --panel: #11151c;
+        --panel-2: #171c25;
+        --text: #e8edf2;
+        --muted: #8f9aaa;
+        --line: #29313d;
+        --green: #38d48b;
+        --red: #ff5f6d;
+        --amber: #f3c969;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 14px;
+      }
+
+      header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--line);
+        background: #0c0f14;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      main {
+        width: min(1220px, calc(100vw - 28px));
+        margin: 18px auto 32px;
+      }
+
+      input,
+      button {
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-2);
+        color: var(--text);
+        font: inherit;
+      }
+
+      input {
+        width: min(340px, 42vw);
+        padding: 0 10px;
+      }
+
+      button {
+        min-width: 72px;
+        padding: 0 10px;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--muted);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .top-row,
+      .controls,
+      .auth,
+      .metric-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .top-row {
+        min-width: 0;
+      }
+
+      .controls {
+        justify-content: flex-end;
+      }
+
+      .pill {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 10px;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .pill.running,
+      .positive {
+        color: var(--green);
+      }
+
+      .pill.running {
+        border-color: rgba(56, 212, 139, 0.45);
+      }
+
+      .pill.paused,
+      .warn {
+        color: var(--amber);
+      }
+
+      .pill.paused {
+        border-color: rgba(243, 201, 105, 0.45);
+      }
+
+      .pill.offline,
+      .negative {
+        color: var(--red);
+      }
+
+      .pill.offline {
+        border-color: rgba(255, 95, 109, 0.45);
+      }
+
+      .start-button {
+        border-color: rgba(56, 212, 139, 0.55);
+      }
+
+      .stop-button {
+        border-color: rgba(255, 95, 109, 0.55);
+      }
+
+      .status {
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .metric,
+      section {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 8px;
+      }
+
+      .metric {
+        min-height: 84px;
+        padding: 14px;
+      }
+
+      .label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 9px;
+      }
+
+      .value {
+        font-size: 18px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .value.precise {
+        font-size: 15px;
+        line-height: 1.35;
+      }
+
+      .metric-actions {
+        margin-top: 10px;
+      }
+
+      .metric-actions button,
+      .metric-actions a {
+        min-height: 30px;
+        min-width: 58px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 5px 8px;
+        color: var(--text);
+        background: var(--panel-2);
+        text-decoration: none;
+      }
+
+      section {
+        margin-top: 14px;
+        overflow: hidden;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel-2);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: middle;
+        overflow-wrap: anywhere;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      .empty {
+        padding: 24px 14px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 860px) {
+        header {
+          grid-template-columns: 1fr;
+        }
+
+        .controls {
+          justify-content: flex-start;
+        }
+
+        input {
+          width: min(100%, 360px);
+        }
+
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="top-row">
+        <h1>Solana Scalper</h1>
+        <span class="pill offline" id="remoteState">AUTH NEEDED</span>
+        <span class="pill paused" id="botState">UNKNOWN</span>
+      </div>
+      <div class="controls">
+        <div class="auth">
+          <input id="tokenInput" type="password" autocomplete="current-password" placeholder="Bridge token">
+          <button id="saveTokenButton" type="button">Save</button>
+          <button id="clearTokenButton" type="button">Clear</button>
+        </div>
+        <button class="start-button" id="startButton" type="button">Start</button>
+        <button class="stop-button" id="stopButton" type="button">Stop</button>
+        <div class="status" id="status">locked</div>
+      </div>
+    </header>
+
+    <main>
+      <div class="metrics">
+        <div class="metric">
+          <div class="label">Laptop Connection</div>
+          <div class="value precise" id="connectionAge">offline</div>
+        </div>
+        <div class="metric">
+          <div class="label">Wallet / Top Up</div>
+          <div class="value precise" id="walletAddress">not connected</div>
+          <div class="metric-actions">
+            <button id="copyWalletButton" type="button" disabled>Copy</button>
+            <a id="explorerLink" href="#" target="_blank" rel="noreferrer">Solscan</a>
+          </div>
+        </div>
+        <div class="metric">
+          <div class="label">SOL Balance</div>
+          <div class="value" id="solBalance">0.000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total Trades</div>
+          <div class="value" id="totalTrades">0</div>
+        </div>
+        <div class="metric">
+          <div class="label">Win Rate</div>
+          <div class="value" id="winRate">0.00%</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total PnL SOL</div>
+          <div class="value precise" id="pnlSol">0.000000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Total PnL USD</div>
+          <div class="value precise" id="pnlUsd">$0.000000</div>
+        </div>
+        <div class="metric">
+          <div class="label">Gemini Budget</div>
+          <div class="value precise" id="geminiTokens">0 / 0</div>
+        </div>
+      </div>
+
+      <section>
+        <div class="section-head">
+          <h2>Open Positions</h2>
+          <span id="mode" class="warn">SIMULATION</span>
+        </div>
+        <div id="positions"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Scan Activity</h2>
+          <span>last 100 decisions</span>
+        </div>
+        <div id="scanActivity"></div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Closed Trades</h2>
+          <span>last 20</span>
+        </div>
+        <div id="closedTrades"></div>
+      </section>
+    </main>
+
+    <script>
+      const TOKEN_KEY = 'solana-scalper-remote-token';
+      const state = {
+        token: localStorage.getItem(TOKEN_KEY) || '',
+        controlBusy: false,
+        lastData: null,
+        timer: null
+      };
+
+      const el = (id) => document.getElementById(id);
+
+      function number(value, digits = 2) {
+        return Number(value || 0).toFixed(digits);
+      }
+
+      function money(value, digits = 2) {
+        return `$${Number(value || 0).toFixed(digits)}`;
+      }
+
+      function durationMs(value) {
+        const ms = Number(value || 0);
+        if (!Number.isFinite(ms)) return 'unknown';
+        if (ms < 1000) return `${ms.toFixed(0)}ms`;
+        if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+        return `${(ms / 60000).toFixed(1)}m`;
+      }
+
+      function pnlClass(value) {
+        const numeric = Number(value || 0);
+        if (numeric > 0) return 'positive';
+        if (numeric < 0) return 'negative';
+        return '';
+      }
+
+      function shortAddress(value) {
+        const text = String(value || '');
+        if (text.length <= 16) return text || 'not connected';
+        return `${text.slice(0, 6)}...${text.slice(-6)}`;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      async function apiFetch(path, options = {}) {
+        if (!state.token) throw new Error('Bridge token required');
+
+        const init = {
+          ...options,
+          headers: {
+            Authorization: `Bearer ${state.token}`,
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...(options.headers || {})
+          }
+        };
+
+        if (options.body && typeof options.body !== 'string') {
+          init.body = JSON.stringify(options.body);
+        }
+
+        const response = await fetch(path, init);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        return data;
+      }
+
+      async function refresh() {
+        try {
+          if (!state.token) {
+            renderLocked();
+            return;
+          }
+
+          const data = await apiFetch('/api/status');
+          state.lastData = data;
+          renderStatus(data);
+        } catch (error) {
+          renderError(error);
+        }
+      }
+
+      function renderLocked() {
+        el('remoteState').textContent = 'AUTH NEEDED';
+        el('remoteState').className = 'pill offline';
+        el('botState').textContent = 'UNKNOWN';
+        el('botState').className = 'pill paused';
+        el('status').textContent = 'enter bridge token';
+        setControlsDisabled(true);
+      }
+
+      function renderError(error) {
+        el('remoteState').textContent = 'ERROR';
+        el('remoteState').className = 'pill offline';
+        el('status').textContent = String(error.message || error);
+        setControlsDisabled(true);
+      }
+
+      function renderStatus(data) {
+        const remote = data.remote || {};
+        const bot = data.bot || {};
+        const wallet = data.wallet || {};
+        const topUpAddress = wallet.temporary ? '' : (wallet.topUpAddress || wallet.publicKey || '');
+        const online = Boolean(remote.online);
+        const running = Boolean(bot.running);
+
+        el('remoteState').textContent = online ? 'LAPTOP ONLINE' : 'LAPTOP OFFLINE';
+        el('remoteState').className = `pill ${online ? 'running' : 'offline'}`;
+        el('connectionAge').textContent = online ? `seen ${durationMs(remote.ageMs)} ago` : 'offline';
+
+        el('botState').textContent = running ? (bot.isScanning ? 'SCANNING' : 'RUNNING') : 'PAUSED';
+        el('botState').className = `pill ${running ? 'running' : 'paused'}`;
+
+        el('walletAddress').textContent = wallet.temporary ? 'temporary simulation wallet' : shortAddress(topUpAddress);
+        el('copyWalletButton').disabled = !topUpAddress;
+        el('explorerLink').href = wallet.explorerUrl || '#';
+
+        el('solBalance').textContent = `${number(data.solBalance, 6)} SOL`;
+        el('totalTrades').textContent = String(data.totalTrades || 0);
+        el('winRate').textContent = `${number(data.winRate, 2)}%`;
+        el('pnlSol').textContent = `${number(data.totalPnlSol, 9)} SOL`;
+        el('pnlUsd').textContent = money(data.totalPnlUsd, 6);
+        el('mode').textContent = data.simulationMode ? 'SIMULATION' : 'LIVE';
+        el('mode').className = data.simulationMode ? 'warn' : 'positive';
+
+        renderGeminiBudget(data.geminiBudget || {});
+        renderPositions(data.openPositions || []);
+        renderScanActivity(data.scanActivityLog || []);
+        renderClosedTrades(data.closedTrades || []);
+
+        el('status').textContent = `updated ${new Date().toLocaleTimeString()} | SOL ${money(data.solPriceUsd)}`;
+        setControlsDisabled(false);
+      }
+
+      function setControlsDisabled(forceDisabled) {
+        const data = state.lastData || {};
+        const running = Boolean(data.bot?.running);
+        const online = Boolean(data.remote?.online);
+        const disabled = forceDisabled || state.controlBusy || !online;
+        el('startButton').disabled = disabled || running;
+        el('stopButton').disabled = disabled || !running;
+      }
+
+      function renderGeminiBudget(budget) {
+        const remaining = Number(budget.tokensRemainingToday || 0);
+        const usable = Number(budget.usableTokens || 0);
+        const requests = `${Number(budget.requestsThisRun || 0)} / ${Number(budget.maxRequestsPerRun || 0)} req`;
+        el('geminiTokens').textContent = `${remaining.toFixed(0)} / ${usable.toFixed(0)} | ${requests}`;
+        el('geminiTokens').className = `value precise ${remaining <= 0 ? 'negative' : remaining < 250 ? 'warn' : ''}`;
+      }
+
+      function renderPositions(positions) {
+        const target = el('positions');
+        if (!positions.length) {
+          target.innerHTML = '<div class="empty">No open positions</div>';
+          return;
+        }
+
+        target.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Token</th>
+                <th>Entry</th>
+                <th>Current</th>
+                <th>PnL %</th>
+                <th>PnL SOL</th>
+                <th>PnL USD</th>
+                <th>Held</th>
+                <th>Tx</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${positions.map((position) => `
+                <tr>
+                  <td>${escapeHtml(position.symbol || position.tokenAddress)}</td>
+                  <td>${number(position.entryPrice, 12)}</td>
+                  <td>${number(position.currentPrice, 12)}</td>
+                  <td class="${pnlClass(position.pnlPercent)}">${number(position.pnlPercent, 6)}%</td>
+                  <td class="${pnlClass(position.pnlSol)}">${number(position.pnlSol, 9)}</td>
+                  <td class="${pnlClass(position.pnlUsd)}">${money(position.pnlUsd, 6)}</td>
+                  <td>${durationMs(position.timeHeldMs)}</td>
+                  <td>${escapeHtml(position.txSignature || '')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function renderScanActivity(entries) {
+        const target = el('scanActivity');
+        if (!entries.length) {
+          target.innerHTML = '<div class="empty">No scan decisions yet</div>';
+          return;
+        }
+
+        target.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Action</th>
+                <th>Token</th>
+                <th>Price</th>
+                <th>Liq USD</th>
+                <th>Vol H1</th>
+                <th>5m %</th>
+                <th>Score</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.map((entry) => `
+                <tr>
+                  <td>${new Date(entry.timestamp).toLocaleTimeString()}</td>
+                  <td>${escapeHtml(entry.action || '')}</td>
+                  <td>${escapeHtml(entry.symbol || entry.tokenAddress)}</td>
+                  <td>${number(entry.priceUsd, 12)}</td>
+                  <td>${number(entry.liquidityUsd, 2)}</td>
+                  <td>${number(entry.volumeH1, 2)}</td>
+                  <td class="${pnlClass(entry.priceChange5m)}">${number(entry.priceChange5m, 4)}%</td>
+                  <td>${entry.score === null || entry.score === undefined ? '-' : number(entry.score, 2)}</td>
+                  <td>${escapeHtml(entry.reason || '')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function renderClosedTrades(trades) {
+        const target = el('closedTrades');
+        if (!trades.length) {
+          target.innerHTML = '<div class="empty">No closed trades</div>';
+          return;
+        }
+
+        target.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Token</th>
+                <th>Exit</th>
+                <th>PnL %</th>
+                <th>PnL SOL</th>
+                <th>PnL USD</th>
+                <th>Held</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${trades.map((trade) => `
+                <tr>
+                  <td>${new Date(trade.exitTime).toLocaleTimeString()}</td>
+                  <td>${escapeHtml(trade.symbol || trade.tokenAddress)}</td>
+                  <td>${number(trade.currentPrice, 12)}</td>
+                  <td class="${pnlClass(trade.pnlPercent)}">${number(trade.pnlPercent, 6)}%</td>
+                  <td class="${pnlClass(trade.pnlSol)}">${number(trade.pnlSol, 9)}</td>
+                  <td class="${pnlClass(trade.pnlUsd)}">${money(trade.pnlUsd, 6)}</td>
+                  <td>${durationMs(trade.heldMs)}</td>
+                  <td>${escapeHtml(trade.reason || '')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      async function controlBot(action) {
+        try {
+          state.controlBusy = true;
+          setControlsDisabled(false);
+          await apiFetch('/api/control', {
+            method: 'POST',
+            body: { action }
+          });
+          el('status').textContent = `${action} command queued`;
+          setTimeout(refresh, 1200);
+        } catch (error) {
+          el('status').textContent = `${action} failed: ${error.message}`;
+        } finally {
+          state.controlBusy = false;
+          setControlsDisabled(false);
+        }
+      }
+
+      async function copyWallet() {
+        const walletData = state.lastData?.wallet || {};
+        const wallet = walletData.temporary ? '' : (walletData.topUpAddress || walletData.publicKey || '');
+        if (!wallet) return;
+        await navigator.clipboard.writeText(wallet);
+        el('status').textContent = 'wallet address copied';
+      }
+
+      function saveToken() {
+        state.token = el('tokenInput').value.trim();
+        if (state.token) {
+          localStorage.setItem(TOKEN_KEY, state.token);
+        } else {
+          localStorage.removeItem(TOKEN_KEY);
+        }
+        refresh();
+      }
+
+      function clearToken() {
+        state.token = '';
+        localStorage.removeItem(TOKEN_KEY);
+        el('tokenInput').value = '';
+        renderLocked();
+      }
+
+      function start() {
+        el('tokenInput').value = state.token;
+        el('saveTokenButton').addEventListener('click', saveToken);
+        el('clearTokenButton').addEventListener('click', clearToken);
+        el('startButton').addEventListener('click', () => controlBot('start'));
+        el('stopButton').addEventListener('click', () => controlBot('stop'));
+        el('copyWalletButton').addEventListener('click', () => copyWallet().catch((error) => {
+          el('status').textContent = `copy failed: ${error.message}`;
+        }));
+        refresh();
+        state.timer = setInterval(refresh, 3000);
+      }
+
+      start();
+    </script>
+  </body>
+</html>

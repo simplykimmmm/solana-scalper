@@ -56,10 +56,11 @@ const getDailyPnlStatement = db.prepare(`
 export function insertTrade(trade) {
   try {
     const normalized = normalizeTrade(trade);
+    if (!normalized) return null;
     const result = insertTradeStatement.run(normalized);
     return Number(result.lastInsertRowid);
   } catch (error) {
-    logger.error('[db] Failed to insert trade:', error.message);
+    logger.error('[db] Failed to insert trade:', { error: error.message });
     return null;
   }
 }
@@ -68,7 +69,7 @@ export function getTradesByMint(mint) {
   try {
     return getTradesByMintStatement.all(String(mint || ''));
   } catch (error) {
-    logger.error('[db] Failed to get trades by mint:', error.message);
+    logger.error('[db] Failed to get trades by mint:', { error: error.message });
     return [];
   }
 }
@@ -81,15 +82,21 @@ export function getDailyPnl(dateUtcString) {
     const row = getDailyPnlStatement.get(start, end);
     return Number(row?.pnl_sol || 0);
   } catch (error) {
-    logger.error('[db] Failed to get daily PnL:', error.message);
+    logger.error('[db] Failed to get daily PnL:', { error: error.message });
     return 0;
   }
 }
 
 function normalizeTrade(trade) {
+  const side = String(trade?.side || '').toLowerCase();
+  if (!['buy', 'sell'].includes(side)) {
+    logger.error('[db] Invalid trade side; expected buy or sell.', { side });
+    return null;
+  }
+
   return {
     mint: String(trade?.mint || trade?.tokenAddress || ''),
-    side: String(trade?.side || '').toLowerCase(),
+    side,
     amount_sol: Number(trade?.amount_sol ?? trade?.amountSol ?? 0),
     price_usd: Number(trade?.price_usd ?? trade?.priceUsd ?? 0),
     tx_signature: String(trade?.tx_signature || trade?.txSignature || ''),

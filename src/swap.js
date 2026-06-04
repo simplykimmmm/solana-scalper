@@ -1,9 +1,9 @@
-import fetch from 'node-fetch';
 import bs58 from 'bs58';
 import { VersionedTransaction } from '@solana/web3.js';
 import CONFIG from '../config.js';
 import logger from './logger.js';
 import { callRpc } from './rpcClient.js';
+import { fetchJson } from './utils/fetchJson.js';
 import { retryWithBackoff } from './utils/retry.js';
 
 const JITO_BUNDLE_URL = 'https://mainnet.block-engine.jito.wtf/api/v1/bundles';
@@ -29,18 +29,22 @@ export async function getComputeUnitPrice() {
     const index = Math.floor((values.length - 1) * 0.75);
     return Math.max(1, Math.floor(values[index]));
   } catch (error) {
-    logger.error('[swap] Failed to fetch prioritization fees; using configured fallback:', error.message);
+    logger.error('[swap] Failed to fetch prioritization fees; using configured fallback:', { error: error.message });
     return CONFIG.PRIORITY_FEE;
   }
 }
 
-export async function getQuote(inputMint, outputMint, amount) {
+export async function getQuote(inputMint, outputMint, amount, liquidityUsd = Number.POSITIVE_INFINITY) {
   return retryWithBackoff(async () => {
     const url = new URL(CONFIG.JUPITER_QUOTE_URL);
+    const slippageBps = Number(liquidityUsd || 0) < CONFIG.SLIPPAGE_LIQUIDITY_THRESHOLD
+      ? CONFIG.SLIPPAGE_BPS_LOW_LIQ
+      : CONFIG.SLIPPAGE_BPS;
+
     url.searchParams.set('inputMint', inputMint);
     url.searchParams.set('outputMint', outputMint);
     url.searchParams.set('amount', String(amount));
-    url.searchParams.set('slippageBps', String(CONFIG.SLIPPAGE_BPS));
+    url.searchParams.set('slippageBps', String(slippageBps));
     url.searchParams.set('onlyDirectRoutes', 'false');
 
     const data = await fetchJson(url.toString());
@@ -94,7 +98,7 @@ export async function signSendAndConfirmSwap({ wallet, swapResponse }) {
       await waitForSignatureConfirmation(txSignature);
       return txSignature;
     } catch (error) {
-      logger.error('[swap] Jito bundle failed or timed out; falling back to normal sendTransaction:', error.message);
+      logger.error('[swap] Jito bundle failed or timed out; falling back to normal sendTransaction:', { error: error.message });
     }
   }
 
@@ -148,63 +152,23 @@ async function waitForSignatureConfirmation(signature) {
 
 async function submitJitoBundle(serializedTransaction) {
   const encodedTransaction = Buffer.from(serializedTransaction).toString('base64');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
 
-  try {
-    const response = await fetch(JITO_BUNDLE_URL, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'sendBundle',
-        params: [[encodedTransaction]]
-      })
-    });
+  const data = await fetchJson(JITO_BUNDLE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'sendBundle',
+      params: [[encodedTransaction]]
+    })
+  }, 3000);
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Jito HTTP ${response.status}: ${text.slice(0, 200)}`);
-    }
-
-    const data = await response.json();
-    if (data?.error) {
-      throw new Error(data.error.message || JSON.stringify(data.error));
-    }
-
-    return data?.result;
-  } finally {
-    clearTimeout(timeout);
+  if (data?.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
   }
-}
 
-async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CONFIG.HTTP_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status} for ${safeUrlForLog(url)}: ${text.slice(0, 200)}`);
-    }
-
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function safeUrlForLog(url) {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname}`;
-  } catch {
-    return String(url);
-  }
+  return data?.result;
 }

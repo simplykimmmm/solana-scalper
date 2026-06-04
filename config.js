@@ -9,7 +9,7 @@ function envBoolean(name, defaultValue) {
     if (value === undefined) return defaultValue;
     return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
   } catch (error) {
-    logger.error(`[config] Failed to read boolean env ${name}:`, error.message);
+    logger.error(`[config] Failed to read boolean env ${name}:`, { error: error.message });
     return defaultValue;
   }
 }
@@ -20,14 +20,13 @@ function envNumber(name, defaultValue) {
     if (!Number.isFinite(value)) return defaultValue;
     return value;
   } catch (error) {
-    logger.error(`[config] Failed to read number env ${name}:`, error.message);
+    logger.error(`[config] Failed to read number env ${name}:`, { error: error.message });
     return defaultValue;
   }
 }
 
 const CONFIG = {
   MIN_LIQUIDITY_USD: 5000,
-  MAX_TOKEN_AGE_MINUTES: 4320,
   VOLUME_SPIKE_MULTIPLIER: 1.5,
   GEMINI_SCORE_THRESHOLD: 5,
   GEMINI_BUDGET_MODE: envBoolean('GEMINI_BUDGET_MODE', true),
@@ -41,6 +40,8 @@ const CONFIG = {
   TRADED_TOKEN_COOLDOWN_MS: envNumber('TRADED_TOKEN_COOLDOWN_MS', 21600000),
   AI_MAX_NEW_DECISIONS_PER_SCAN: envNumber('AI_MAX_NEW_DECISIONS_PER_SCAN', 1),
   SLIPPAGE_BPS: 150,
+  SLIPPAGE_BPS_LOW_LIQ: 300,
+  SLIPPAGE_LIQUIDITY_THRESHOLD: envNumber('SLIPPAGE_LIQUIDITY_THRESHOLD', 50000),
   PRIORITY_FEE: envNumber('PRIORITY_FEE', envNumber('PRIORITY_FEE_LAMPORTS', 100000)),
   PRIORITY_FEE_LAMPORTS: envNumber('PRIORITY_FEE_LAMPORTS', envNumber('PRIORITY_FEE', 100000)),
   TRADE_SIZE_SOL: 0.05,
@@ -58,6 +59,7 @@ const CONFIG = {
   MAX_DAILY_LOSS_SOL: envNumber('MAX_DAILY_LOSS_SOL', 0.5),
   SCAN_INTERVAL_MS: 2000,
   SIMULATION_MODE: envBoolean('SIMULATION_MODE', true),
+  SIMULATION_BALANCE_SOL: envNumber('SIMULATION_BALANCE_SOL', 0.2),
   PRIMARY_RPC_URL: process.env.PRIMARY_RPC_URL || process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
   FALLBACK_RPC_URL: process.env.FALLBACK_RPC_URL || 'https://api.mainnet-beta.solana.com',
   RPC_URL: process.env.RPC_URL || process.env.PRIMARY_RPC_URL || 'https://api.mainnet-beta.solana.com',
@@ -69,6 +71,10 @@ const CONFIG = {
   TRANSACTION_CONFIRM_TIMEOUT_MS: envNumber('TRANSACTION_CONFIRM_TIMEOUT_MS', 30000),
   TRANSACTION_CONFIRM_POLL_MS: envNumber('TRANSACTION_CONFIRM_POLL_MS', 1000),
   DASHBOARD_PORT: 3001,
+  REMOTE_BRIDGE_URL: process.env.REMOTE_BRIDGE_URL || '',
+  REMOTE_BRIDGE_TOKEN: process.env.REMOTE_BRIDGE_TOKEN || '',
+  REMOTE_BRIDGE_AGENT_ID: process.env.REMOTE_BRIDGE_AGENT_ID || 'laptop-main',
+  REMOTE_BRIDGE_POLL_MS: envNumber('REMOTE_BRIDGE_POLL_MS', 3000),
   HTTP_TIMEOUT_MS: 8000,
   DEXSCREENER_REQUEST_SPACING_MS: 350,
   DEXSCREENER_429_COOLDOWN_MS: 15000,

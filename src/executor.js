@@ -17,7 +17,7 @@ export default class Executor {
       this.connection = connection;
       this.wallet = wallet;
     } catch (error) {
-      logger.error('[executor] Failed to initialize executor:', error.message);
+      logger.error('[executor] Failed to initialize executor:', { error: error.message });
     }
   }
 
@@ -35,7 +35,12 @@ export default class Executor {
         };
       }
 
-      const quoteResponse = await getQuote(CONFIG.SOL_MINT, candidate.tokenAddress, amountLamports);
+      const quoteResponse = await getQuote(
+        CONFIG.SOL_MINT,
+        candidate.tokenAddress,
+        amountLamports,
+        Number(candidate?.liquidity?.usd || 0)
+      );
       const computeUnitPrice = await getComputeUnitPrice();
       const swapResponse = await buildSwapTransaction(
         quoteResponse,
@@ -55,7 +60,7 @@ export default class Executor {
         amountOut: String(quoteResponse.outAmount || '0')
       };
     } catch (error) {
-      logger.error(`[executor] Buy failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, error.message);
+      logger.error(`[executor] Buy failed for ${candidate?.symbol || candidate?.tokenAddress || 'unknown'}:`, { error: error.message });
       return { success: false, txSignature: '', entryPrice: 0, amountOut: '0' };
     }
   }
@@ -84,7 +89,12 @@ export default class Executor {
         return { success: false, txSignature: '' };
       }
 
-      const quoteResponse = await getQuote(position.tokenAddress, CONFIG.SOL_MINT, amount);
+      const quoteResponse = await getQuote(
+        position.tokenAddress,
+        CONFIG.SOL_MINT,
+        amount,
+        Number(position?.liquidityUsd || 0)
+      );
       const computeUnitPrice = await getComputeUnitPrice();
       const swapResponse = await buildSwapTransaction(
         quoteResponse,
@@ -99,7 +109,7 @@ export default class Executor {
       this.logTradeAction(`SELL_${reason}`, token, currentPrice, `${pnlPercent.toFixed(2)}%`);
       return { success: true, txSignature };
     } catch (error) {
-      logger.error(`[executor] Sell failed for ${position?.symbol || position?.tokenAddress || 'unknown'}:`, error.message);
+      logger.error(`[executor] Sell failed for ${position?.symbol || position?.tokenAddress || 'unknown'}:`, { error: error.message });
       return { success: false, txSignature: '' };
     }
   }
@@ -118,7 +128,7 @@ export default class Executor {
       );
       return String(balance.value.amount || '0');
     } catch (error) {
-      logger.error(`[executor] Failed to read token account balance for ${tokenMint}:`, error.message);
+      logger.error(`[executor] Failed to read token account balance for ${tokenMint}:`, { error: error.message });
       return '0';
     }
   }
@@ -133,22 +143,9 @@ export default class Executor {
         return splToken.getAssociatedTokenAddressSync(mint, owner);
       }
 
-      const legacyToken = splToken.Token || splToken.default?.Token;
-      const associatedProgramId = splToken.ASSOCIATED_TOKEN_PROGRAM_ID || splToken.default?.ASSOCIATED_TOKEN_PROGRAM_ID;
-      const tokenProgramId = splToken.TOKEN_PROGRAM_ID || splToken.default?.TOKEN_PROGRAM_ID;
-
-      if (legacyToken?.getAssociatedTokenAddress && associatedProgramId && tokenProgramId) {
-        return await legacyToken.getAssociatedTokenAddress(
-          associatedProgramId,
-          tokenProgramId,
-          mint,
-          owner
-        );
-      }
-
       throw new Error('No compatible associated token address helper found in @solana/spl-token.');
     } catch (error) {
-      logger.error('[executor] Failed to derive associated token address:', error.message);
+      logger.error('[executor] Failed to derive associated token address:', { error: error.message });
       throw error;
     }
   }
@@ -160,7 +157,7 @@ export default class Executor {
       if (!entry) return 0;
       return ((current - entry) / entry) * 100;
     } catch (error) {
-      logger.error('[executor] Failed to calculate PnL:', error.message);
+      logger.error('[executor] Failed to calculate PnL:', { error: error.message });
       return 0;
     }
   }
@@ -175,7 +172,7 @@ export default class Executor {
       });
       logger.info(`[${timestamp}] ${action} ${token} ${Number(price || 0).toFixed(10)} ${pnl}`);
     } catch (error) {
-      logger.error('[executor] Failed to log trade action:', error.message);
+      logger.error('[executor] Failed to log trade action:', { error: error.message });
     }
   }
 }
